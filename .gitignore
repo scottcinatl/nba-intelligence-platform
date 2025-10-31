@@ -1,0 +1,67 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+logs
+*.log
+
+# Output files (prediction results)
+prediction-engine/output/*.csv
+prediction-engine/output/*.json
+
+# Validation reports
+results-validation/validation/
+*.validation.json
+
+# Temporary files
+.tmp/
+temp/
+*.tmp
+*.temp
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build directories
+dist/
+build/
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# API keys and sensitive data
+*.key
+*.pem
+config/secrets.json
+
+# Cache
+.cache/
+.parcel-cache/
+
+# Optional: Keep sample files but ignore actual data
+# !prediction-engine/output/sample_*.csv
+# !results-validation/validation/sample_*.json

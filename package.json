@@ -1,0 +1,40 @@
+{
+  "name": "nba-intelligence-platform",
+  "version": "1.0.0",
+  "description": "Comprehensive NBA intelligence platform with prediction engine, validation system, and analytics dashboard",
+  "main": "prediction-engine/prediction-engine.js",
+  "type": "module",
+  "bin": {
+    "nba-predict": "./prediction-engine/prediction-engine.js",
+    "nba-validate": "./results-validation/validator.js"
+  },
+  "scripts": {
+    "predict": "node prediction-engine/prediction-engine.js",
+    "validate": "node results-validation/validator.js --latest",
+    "validate-date": "node results-validation/validator.js",
+    "start": "node prediction-engine/prediction-engine.js",
+    "setup": "npm install",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "nba",
+    "basketball",
+    "prediction",
+    "forecasting",
+    "analytics",
+    "intelligence",
+    "validation",
+    "machine-learning",
+    "sports-analytics",
+    "api"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "csv-parse": "^6.1.0",
+    "pdf-parse": "^1.1.1"
+  }
+}

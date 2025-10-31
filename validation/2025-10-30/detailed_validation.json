@@ -1,0 +1,70 @@
+{
+  "date": "2025-10-30",
+  "gameValidation": [],
+  "playerValidation": [],
+  "strategyValidation": [
+    {
+      "matchup": "undefined @ undefined",
+      "predictions": {},
+      "actual": {},
+      "validations": {},
+      "overallAccuracy": 0
+    },
+    {
+      "matchup": "undefined @ undefined",
+      "predictions": {},
+      "actual": {},
+      "validations": {},
+      "overallAccuracy": 0
+    },
+    {
+      "matchup": "undefined @ undefined",
+      "predictions": {},
+      "actual": {},
+      "validations": {},
+      "overallAccuracy": 0
+    },
+    {
+      "matchup": "undefined @ undefined",
+      "predictions": {},
+      "actual": {},
+      "validations": {},
+      "overallAccuracy": 0
+    }
+  ],
+  "enhancementValidation": [],
+  "uncertaintyValidation": [],
+  "overallAccuracy": {
+    "games": {},
+    "players": {},
+    "enhancements": {},
+    "uncertainty": {},
+    "strategy": {
+      "averageStrategicAccuracy": 0,
+      "gamesWithStrategicAnalysis": 4
+    }
+  },
+  "confidenceCalibration": {
+    "high": {
+      "correct": 0,
+      "total": 0,
+      "accuracy": 0
+    },
+    "medium": {
+      "correct": 0,
+      "total": 0,
+      "accuracy": 0
+    },
+    "low": {
+      "correct": 0,
+      "total": 0,
+      "accuracy": 0
+    }
+  },
+  "modelInsights": {
+    "strengths": [],
+    "weaknesses": [],
+    "recommendations": []
+  },
+  "finishedGamesCount": 4
+}
