@@ -11,7 +11,8 @@ export default {
   async fetch(request) {
     const url = new URL(request.url);
     const date = url.searchParams.get('date') || getTodayDate();
-    
+    const time = url.searchParams.get('time') || '03PM'; // Default to 3 PM report
+
     // Add CORS headers
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
@@ -24,19 +25,25 @@ export default {
     }
 
     try {
-      // Construct the official NBA injury report URL
-      const injuryReportUrl = `https://ak-static.cms.nba.com/referee/injury/Injury-Report_${date}_03PM.pdf`;
-      
+      // Construct the official NBA injury report URL with dynamic time
+      const injuryReportUrl = `https://ak-static.cms.nba.com/referee/injury/Injury-Report_${date}_${time}.pdf`;
+
       console.log(`Fetching official injury report: ${injuryReportUrl}`);
-      
-      // Check if PDF exists
-      const pdfResponse = await fetch(injuryReportUrl, { method: 'HEAD' });
-      
+
+      // Fetch the PDF with proper headers
+      const pdfResponse = await fetch(injuryReportUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/pdf,*/*',
+          'Referer': 'https://www.nba.com/'
+        }
+      });
+
       if (!pdfResponse.ok) {
         return new Response(
           JSON.stringify({
             success: false,
-            error: `Official injury report not available for ${date}`,
+            error: `Official injury report not available for ${date} at ${time}`,
             attempted_url: injuryReportUrl,
             status: pdfResponse.status
           }),
@@ -49,12 +56,18 @@ export default {
         );
       }
 
-      // PDF exists, return URL and metadata
+      // Get PDF as array buffer and convert to base64
+      const arrayBuffer = await pdfResponse.arrayBuffer();
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+
+      // Return PDF data as base64
       return new Response(
         JSON.stringify({
           success: true,
           date,
+          time,
           pdfUrl: injuryReportUrl,
+          pdfData: base64, // Base64 encoded PDF
           source: 'NBA_OFFICIAL',
           lastUpdated: new Date().toISOString(),
           note: 'Official NBA injury report containing all teams'
