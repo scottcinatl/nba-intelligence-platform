@@ -53,6 +53,111 @@ console.log('');
 
 // WORKERS constant now imported from config/constants.js
 
+/**
+ * All available injury report times in chronological order
+ * Format used in NBA PDF URLs (e.g., "12AM", "03PM")
+ * Note: UI shows half-hour times (12:30 PM) but PDFs are published on the hour (12PM)
+ */
+const INJURY_REPORT_TIMES = [
+  { hour: 0, minute: 0, format: '12AM' },   // 12:00 AM ET (shown as 12:30 AM on website)
+  { hour: 1, minute: 0, format: '01AM' },   // 1:00 AM ET (shown as 1:30 AM on website)
+  { hour: 2, minute: 0, format: '02AM' },   // 2:00 AM ET (shown as 2:30 AM on website)
+  { hour: 3, minute: 0, format: '03AM' },   // 3:00 AM ET (shown as 3:30 AM on website)
+  { hour: 4, minute: 0, format: '04AM' },   // 4:00 AM ET (shown as 4:30 AM on website)
+  { hour: 5, minute: 0, format: '05AM' },   // 5:00 AM ET (shown as 5:30 AM on website)
+  { hour: 6, minute: 0, format: '06AM' },   // 6:00 AM ET (shown as 6:30 AM on website)
+  { hour: 7, minute: 0, format: '07AM' },   // 7:00 AM ET (shown as 7:30 AM on website)
+  { hour: 8, minute: 0, format: '08AM' },   // 8:00 AM ET (shown as 8:30 AM on website)
+  { hour: 9, minute: 0, format: '09AM' },   // 9:00 AM ET (shown as 9:30 AM on website)
+  { hour: 10, minute: 0, format: '10AM' },  // 10:00 AM ET (shown as 10:30 AM on website)
+  { hour: 11, minute: 0, format: '11AM' },  // 11:00 AM ET (shown as 11:30 AM on website)
+  { hour: 12, minute: 0, format: '12PM' }   // 12:00 PM ET (shown as 12:30 PM on website)
+];
+
+/**
+ * Get current time in ET timezone
+ * Handles conversion from any local timezone to ET (UTC-5 or UTC-4 during DST)
+ */
+function getCurrentTimeET() {
+  const now = new Date();
+
+  // Convert to ET timezone using toLocaleString
+  const etTimeString = now.toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
+  // Parse the ET time string (format: "MM/DD/YYYY, HH:MM:SS")
+  const [datePart, timePart] = etTimeString.split(', ');
+  const [month, day, year] = datePart.split('/').map(Number);
+  const [hour, minute, second] = timePart.split(':').map(Number);
+
+  return {
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    second,
+    dateString: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  };
+}
+
+/**
+ * Get the most recent available injury report time
+ * Returns the format string (e.g., "0930AM") for the most recent report
+ */
+function getMostRecentReportTime() {
+  const etTime = getCurrentTimeET();
+  const currentMinutes = etTime.hour * 60 + etTime.minute;
+
+  // Find the most recent report time that has already passed
+  let selectedReport = null;
+
+  for (let i = INJURY_REPORT_TIMES.length - 1; i >= 0; i--) {
+    const report = INJURY_REPORT_TIMES[i];
+    const reportMinutes = report.hour * 60 + report.minute;
+
+    if (currentMinutes >= reportMinutes) {
+      selectedReport = report;
+      break;
+    }
+  }
+
+  // If no report has passed yet today (before 12:00 AM), use yesterday's 12:00 PM report
+  if (!selectedReport) {
+    const yesterday = new Date(etTime.year, etTime.month - 1, etTime.day - 1);
+    const yesterdayString = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+
+    return {
+      time: '12PM',
+      date: yesterdayString,
+      description: "12:00 PM ET (previous day)"
+    };
+  }
+
+  return {
+    time: selectedReport.format,
+    date: etTime.dateString,
+    description: formatReportTimeDescription(selectedReport)
+  };
+}
+
+/**
+ * Format a report time into a human-readable description
+ */
+function formatReportTimeDescription(report) {
+  const hour12 = report.hour === 0 ? 12 : (report.hour > 12 ? report.hour - 12 : report.hour);
+  const ampm = report.hour < 12 ? 'AM' : 'PM';
+  return `${hour12}:00 ${ampm} ET`;
+}
+
 // Enhanced CSV data collectors for multiple sheets
 let gameData = [];
 let playerData = [];  
@@ -177,66 +282,75 @@ async function fetchInjuries(teamAbbr) {
 }
 
 /**
- * ENHANCED: Fetch injuries from official NBA injury report
+ * ENHANCED: Fetch injuries from official NBA injury report with smart time selection
+ * Automatically selects most recent available report and falls back to earlier times if needed
  */
 async function fetchInjuriesWithOfficial() {
   let dataSource = 'NBA_OFFICIAL';
   let pdfEnhanced = false;
-  
+
   try {
     console.log(`📋 Fetching official NBA injury report...`);
-    
-    const officialResponse = await fetch(`${WORKERS.injuriesOfficial}/`);
-    const officialData = await officialResponse.json();
-    
-    if (officialData.success && officialData.pdfUrl) {
-      console.log(`   📄 Downloading official report: ${officialData.pdfUrl}`);
-      
-      if (pdf) {
-        try {
-          const pdfResponse = await fetch(officialData.pdfUrl);
-          if (pdfResponse.ok) {
-            const arrayBuffer = await pdfResponse.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
-            
-            console.log(`   📝 Parsing official injury report...`);
-            const data = await pdf(buffer);
-            const text = data.text;
-            
-            console.log(`   ✅ Official report parsed! ${text.length} characters extracted`);
-            
-            const allInjuries = parseOfficialInjuryReport(text);
-            console.log(`   📊 Extracted: ${allInjuries.length} total injuries from official report`);
-            
-            pdfEnhanced = true;
-            dataSource = 'NBA_OFFICIAL_PARSED';
-            
-            return {
-              success: true,
-              allInjuries,
-              dataSource,
-              pdfEnhanced,
-              pdfUrl: officialData.pdfUrl,
-              rawPdfLength: text.length
-            };
-          }
-        } catch (pdfError) {
-          console.log(`   ⚠️  Official report parsing failed: ${pdfError.message}`);
-        }
-      } else {
-        console.log(`   ⚠️  PDF parsing not available`);
-      }
-    } else {
-      console.log(`   ⚠️  Official injury report not available: ${officialData.error}`);
+
+    // Get the most recent report time based on current ET time
+    const reportInfo = getMostRecentReportTime();
+    console.log(`   🕐 Targeting ${reportInfo.description} report`);
+
+    // Try the most recent report time first
+    let result = await tryFetchInjuryReport(reportInfo.date, reportInfo.time);
+
+    // If failed, fall back to earlier report times
+    if (!result.success) {
+      console.log(`   ⚠️  ${reportInfo.description} report not available, trying earlier times...`);
+      result = await fallbackToEarlierReports(reportInfo);
     }
-    
+
+    // If we got a successful result, parse the PDF
+    if (result.success && result.pdfData && pdf) {
+      console.log(`   📄 Processing official report from worker`);
+      console.log(`   ✅ Using ${result.reportDescription} report`);
+
+      try {
+        // Decode base64 PDF data from worker
+        const buffer = Buffer.from(result.pdfData, 'base64');
+
+        console.log(`   📝 Parsing official injury report...`);
+        const data = await pdf(buffer);
+        const text = data.text;
+
+        console.log(`   ✅ Official report parsed! ${text.length} characters extracted`);
+
+        const allInjuries = parseOfficialInjuryReport(text);
+        console.log(`   📊 Extracted: ${allInjuries.length} total injuries from official report`);
+
+        pdfEnhanced = true;
+        dataSource = 'NBA_OFFICIAL_PARSED';
+
+        return {
+          success: true,
+          allInjuries,
+          dataSource,
+          pdfEnhanced,
+          pdfUrl: result.pdfUrl,
+          rawPdfLength: text.length,
+          reportTime: result.reportDescription
+        };
+      } catch (pdfError) {
+        console.log(`   ⚠️  Official report parsing failed: ${pdfError.message}`);
+      }
+    } else if (!pdf) {
+      console.log(`   ⚠️  PDF parsing not available`);
+    } else {
+      console.log(`   ⚠️  No injury reports available for any time today`);
+    }
+
     return {
       success: false,
       allInjuries: [],
       dataSource: 'UNAVAILABLE',
       pdfEnhanced: false
     };
-    
+
   } catch (error) {
     console.log(`   ⚠️  Official injury report error: ${error.message}`);
     return {
@@ -246,6 +360,65 @@ async function fetchInjuriesWithOfficial() {
       pdfEnhanced: false
     };
   }
+}
+
+/**
+ * Try to fetch injury report for a specific date and time
+ */
+async function tryFetchInjuryReport(date, time) {
+  try {
+    const url = `${WORKERS.injuriesOfficial}/?date=${date}&time=${time}`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.success && data.pdfData) {
+      return {
+        success: true,
+        pdfUrl: data.pdfUrl,
+        pdfData: data.pdfData, // Base64 encoded PDF from worker
+        reportDescription: data.time ? formatTimeFromCode(data.time) : '3:00 PM ET'
+      };
+    }
+
+    return { success: false };
+  } catch (error) {
+    return { success: false };
+  }
+}
+
+/**
+ * Fall back to earlier report times if the most recent one isn't available
+ */
+async function fallbackToEarlierReports(reportInfo) {
+  // Get the index of the time we tried
+  const targetIndex = INJURY_REPORT_TIMES.findIndex(r => r.format === reportInfo.time);
+
+  // Try all earlier times in reverse chronological order
+  for (let i = targetIndex - 1; i >= 0; i--) {
+    const report = INJURY_REPORT_TIMES[i];
+    const result = await tryFetchInjuryReport(reportInfo.date, report.format);
+
+    if (result.success) {
+      return result; // Result already has reportDescription from tryFetchInjuryReport
+    }
+  }
+
+  // No reports found for today
+  return { success: false };
+}
+
+/**
+ * Convert time code (e.g., "09AM") to readable format (e.g., "9:00 AM ET")
+ */
+function formatTimeFromCode(timeCode) {
+  const match = timeCode.match(/(\d{2})(AM|PM)/);
+  if (!match) return timeCode;
+
+  let hour = parseInt(match[1]);
+  const ampm = match[2];
+
+  // Convert to 12-hour format (hour is already in 1-12 range in the format)
+  return `${hour}:00 ${ampm} ET`;
 }
 
 /**
@@ -342,7 +515,9 @@ function getTeamFromLine(line) {
 }
 
 /**
- * Parse injury data from a concatenated line (no spaces between fields)
+ * Parse injury data from a concatenated line
+ * Format: TeamNameLastName,FirstNameStatus[Reason]
+ * Example: SacramentoKingsClifford,NiqueQuestionableInjury/Illness-RightHamstring
  */
 function parseInjuryFromConcatenatedLine(line, fallbackTeam = null) {
   try {
@@ -393,12 +568,25 @@ function parseInjuryFromConcatenatedLine(line, fallbackTeam = null) {
 
     if (!teamAbbr) return null;
 
-    // Extract status
+    // Extract status (check in priority order: Questionable before Question, etc.)
     let status = null;
-    if (line.includes('Out')) status = 'out';
-    else if (line.includes('Doubtful')) status = 'doubtful';
-    else if (line.includes('Questionable')) status = 'questionable';
-    else if (line.includes('Probable')) status = 'probable';
+    let statusWord = null;
+    if (line.includes('Questionable')) {
+      status = 'questionable';
+      statusWord = 'Questionable';
+    } else if (line.includes('Doubtful')) {
+      status = 'doubtful';
+      statusWord = 'Doubtful';
+    } else if (line.includes('Probable')) {
+      status = 'probable';
+      statusWord = 'Probable';
+    } else if (line.includes('Available')) {
+      status = 'available';
+      statusWord = 'Available';
+    } else if (line.includes('Out')) {
+      status = 'out';
+      statusWord = 'Out';
+    }
 
     if (!status) return null;
 
@@ -408,49 +596,34 @@ function parseInjuryFromConcatenatedLine(line, fallbackTeam = null) {
       workingLine = workingLine.replace(teamPattern.pattern, '');
     }
 
-    // Extract player name (before status)
-    const statusIndex = workingLine.indexOf(status.charAt(0).toUpperCase() + status.slice(1));
+    // Find where the status word appears
+    const statusIndex = workingLine.indexOf(statusWord);
     if (statusIndex === -1) return null;
 
-    let playerSection = workingLine.substring(0, statusIndex).trim();
+    // Extract player name (everything before status)
+    let playerName = workingLine.substring(0, statusIndex).trim();
 
-    // Clean up playerSection - remove common artifacts
-    playerSection = playerSection.replace(/^[^a-zA-Z]+/, ''); // Remove leading non-letters
-    playerSection = playerSection.replace(/\d{1,2}\/\d{1,2}\/\d{4}/, ''); // Remove dates
-    playerSection = playerSection.trim();
-
-    // Extract player name (typically before position like "G" or "F")
-    let playerName = playerSection;
-
-    // Try to find position markers and extract name before them
-    const positionMatch = playerName.match(/([A-Z]{1,2})(?:[A-Z][a-z]|$)/);
-    if (positionMatch && positionMatch.index > 5) {
-      playerName = playerName.substring(0, positionMatch.index).trim();
+    // Player name is in format "LastName,FirstName" - convert to "FirstName LastName"
+    if (playerName.includes(',')) {
+      const parts = playerName.split(',');
+      if (parts.length === 2) {
+        playerName = `${parts[1].trim()} ${parts[0].trim()}`;
+      }
     }
 
-    // Clean up the player name
-    playerName = playerName.replace(/\s+/g, ' ').trim();
-
-    // Extract description (after status)
-    let description = workingLine.substring(statusIndex + status.length).trim();
+    // Extract description (everything after status)
+    let description = workingLine.substring(statusIndex + statusWord.length).trim();
 
     // Clean up description
-    description = description.replace(/^[^a-zA-Z]+/, '');
     description = description.substring(0, 100); // Truncate
 
     // Final validation
     if (!playerName || playerName.length < 3) return null;
 
-    // Make sure we have at least first and last name
-    const nameParts = playerName.split(' ');
-    if (nameParts.length < 2) {
-      // Try to extract from position marker
-      const fullMatch = playerSection.match(/([A-Z][a-z]+)\s+([A-Z][a-z]+)/);
-      if (fullMatch) {
-        playerName = `${fullMatch[1]} ${fullMatch[2]}`;
-      } else {
-        return null;
-      }
+    // Make sure we have at least first and last name (or it's a Jr./Sr. case)
+    const nameParts = playerName.split(' ').filter(p => p.length > 0);
+    if (nameParts.length < 2 && !playerName.includes('Jr') && !playerName.includes('Sr')) {
+      return null; // Invalid name format
     }
 
     // Clean up description further

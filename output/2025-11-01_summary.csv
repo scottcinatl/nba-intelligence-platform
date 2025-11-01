@@ -1,7 +1,7 @@
 Date,Matchup,Prediction,Total,Confidence,AwayInjuries,HomeInjuries
-2025-11-01,SAC @ MIL,Milwaukee Bucks by 28.0,240,High,0,0
-2025-11-01,MIN @ CHA,Charlotte Hornets by 16.0,244,High,0,0
-2025-11-01,GSW @ IND,Golden State Warriors by 7.0,229,Medium,0,0
-2025-11-01,ORL @ WAS,Washington Wizards by 9.0,235,Medium,0,0
-2025-11-01,HOU @ BOS,Boston Celtics by 3.0,245,Low,0,0
-2025-11-01,DAL @ DET,Detroit Pistons by 29.0,231,Medium,0,0
+2025-11-01,SAC @ MIL,Milwaukee Bucks by 28.0,240,High,4,2
+2025-11-01,MIN @ CHA,Charlotte Hornets by 16.0,244,High,4,6
+2025-11-01,GSW @ IND,Golden State Warriors by 7.0,229,Medium,2,8
+2025-11-01,ORL @ WAS,Washington Wizards by 9.0,235,Medium,3,0
+2025-11-01,HOU @ BOS,Boston Celtics by 3.0,245,Low,2,0
+2025-11-01,DAL @ DET,Detroit Pistons by 27.0,231,High,6,2
