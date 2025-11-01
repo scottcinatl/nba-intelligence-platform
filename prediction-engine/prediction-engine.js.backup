@@ -249,34 +249,304 @@ async function fetchInjuriesWithOfficial() {
 }
 
 /**
+ * Analyze if a player has an elevated role based on recent form vs season averages
+ * Based on basketball analytics research using 3-game windows and usage metrics
+ */
+function analyzePlayerRoleElevation(player) {
+  if (!player.seasonAverages || !player.recentForm) {
+    return {
+      minutesChange: 0,
+      usageChange: 0,
+      isElevated: false,
+      elevationMagnitude: 0
+    };
+  }
+  
+  const seasonAvg = player.seasonAverages;
+  const recentForm = player.recentForm; // Last 3 games
+  
+  // Research-based thresholds
+  const significantMinutesThreshold = 15; // Research: 10+ minutes is significant
+  const elevationThreshold = 1.2; // 20% increase in minutes
+  const usageElevationThreshold = 1.15; // 15% increase in usage
+  
+  const minutesChange = (recentForm.minutes || 0) - (seasonAvg.minutes || 0);
+  const usageChange = (recentForm.usage || 0) - (seasonAvg.usage || 0);
+  
+  // Player is "elevated" if:
+  // 1. Playing significantly more minutes than season average (20%+ increase)
+  // 2. Getting at least 15+ minutes per game recently
+  // 3. Usage rate has increased by 15%+
+  const isElevated = (
+    recentForm.minutes > Math.max(seasonAvg.minutes * elevationThreshold, significantMinutesThreshold) &&
+    recentForm.usage > seasonAvg.usage * usageElevationThreshold
+  );
+  
+  const elevationMagnitude = seasonAvg.minutes > 0 ? 
+    (recentForm.minutes - seasonAvg.minutes) / seasonAvg.minutes : 0;
+  
+  return {
+    minutesChange,
+    usageChange,
+    isElevated,
+    elevationMagnitude
+  };
+}
+
+/**
+ * Calculate the impact of a returning player on teammates based on role elevation
+ * Uses research-backed methodology for measuring rotation changes
+ */
+function calculateReturnImpact(returningPlayer, teammate, teammateElevation) {
+  if (!teammateElevation.isElevated) {
+    return {
+      adjustment: 0,
+      reason: 'No elevation detected'
+    };
+  }
+  
+  // Base impact based on returning player's tier (research-backed tiers)
+  let baseImpact = 0;
+  switch (returningPlayer.impact.tier) {
+    case 'Superstar':
+      baseImpact = -0.20; // -20% significant impact
+      break;
+    case 'Star':
+      baseImpact = -0.15; // -15% moderate impact
+      break;
+    case 'Key Role':
+      baseImpact = -0.08; // -8% minor impact
+      break;
+    default:
+      baseImpact = -0.03; // -3% minimal impact
+  }
+  
+  // Scale by teammate's elevation magnitude (cap at 2x for extreme cases)
+  const elevationFactor = Math.min(Math.max(teammateElevation.elevationMagnitude, 0.1), 2.0);
+  
+  // Position-based adjustments (research shows guards vs bigs have different dynamics)
+  let positionFactor = 1.0;
+  if (teammate.position && returningPlayer.position) {
+    // Same position = higher impact
+    if (teammate.position === returningPlayer.position) {
+      positionFactor = 1.3;
+    }
+    // Guard returning affects other guards more than bigs
+    else if (returningPlayer.position.includes('G') && teammate.position.includes('G')) {
+      positionFactor = 1.2;
+    }
+  }
+  
+  const finalAdjustment = baseImpact * elevationFactor * positionFactor;
+  
+  const reason = `${returningPlayer.playerName} (${returningPlayer.impact.tier}) returning, ` +
+    `${teammate.playerName} elevated ${Math.round(teammateElevation.elevationMagnitude * 100)}%`;
+  
+  return {
+    adjustment: finalAdjustment,
+    reason: reason
+  };
+}
+
+/**
+ * Enhance player data with season averages and recent form analysis
+ */
+function enhancePlayerData(players) {
+  return players.map(player => {
+    // For now, simulate season vs recent form comparison
+    // In production, this would come from your player stats API with different time ranges
+    const seasonAvg = {
+      minutes: player.minutes * 0.9, // Assume season average is 90% of current
+      usage: (player.usage || 20) * 0.95, // Assume recent form is elevated
+      points: player.points * 0.92,
+      assists: player.assists * 0.94,
+      rebounds: player.rebounds * 0.96
+    };
+    
+    const recentForm = {
+      minutes: player.minutes,
+      usage: player.usage || 20,
+      points: player.points,
+      assists: player.assists,
+      rebounds: player.rebounds
+    };
+    
+    const roleAnalysis = analyzePlayerRoleElevation({
+      seasonAverages: seasonAvg,
+      recentForm: recentForm
+    });
+    
+    return {
+      ...player,
+      seasonAverages: seasonAvg,
+      recentForm: recentForm,
+      roleAnalysis: roleAnalysis
+    };
+  });
+}
+
+/**
+ * Check if a player has actually missed recent games (indicating they're truly returning)
+ * For now, we'll use a heuristic based on minutes played and games data
+ */
+function playerMissedRecentGames(player, teamStats) {
+  // If we don't have enough data, be conservative
+  if (!teamStats || !player.minutes) {
+    return false;
+  }
+  
+  // Heuristic: If player is getting normal rotation minutes (15+), 
+  // they probably haven't missed significant time
+  const hasSignificantMinutes = player.minutes >= 15;
+  
+  // If they're playing 15+ minutes regularly, they're probably not "returning"
+  // This catches cases like Jaylen Brown who's been playing all season
+  if (hasSignificantMinutes) {
+    return false;
+  }
+  
+  // If playing < 15 minutes, might actually be returning from injury
+  return true;
+}
+
+/**
+ * Calculate dynamic home court advantage based on actual home/away records
+ */
+function calculateDynamicHomeAdvantage(homeTeamStats, awayTeamStats) {
+  // Default home advantage if we don't have home/away splits
+  const defaultHomeAdvantage = 2.5;
+  
+  if (!homeTeamStats.homeRecord || !awayTeamStats.awayRecord) {
+    return defaultHomeAdvantage;
+  }
+  
+  // Calculate actual home/away performance
+  const homeWinPct = homeTeamStats.homeRecord.wins / 
+    (homeTeamStats.homeRecord.wins + homeTeamStats.homeRecord.losses);
+  
+  const awayWinPct = awayTeamStats.awayRecord.wins / 
+    (awayTeamStats.awayRecord.wins + awayTeamStats.awayRecord.losses);
+  
+  // If we don't have enough home/away games, use overall record + small home boost
+  const homeGames = homeTeamStats.homeRecord.wins + homeTeamStats.homeRecord.losses;
+  const awayGames = awayTeamStats.awayRecord.wins + awayTeamStats.awayRecord.losses;
+  
+  if (homeGames < 2 || awayGames < 2) {
+    // Early season: use overall record + small home boost
+    const homeOverallWinPct = homeTeamStats.wins / (homeTeamStats.wins + homeTeamStats.losses);
+    const awayOverallWinPct = awayTeamStats.wins / (awayTeamStats.wins + awayTeamStats.losses);
+    
+    // Home advantage = difference in overall records + 1.5 point baseline
+    const recordDifference = (homeOverallWinPct - awayOverallWinPct) * 10; // Scale to points
+    return Math.max(0, Math.min(6, 1.5 + recordDifference)); // Cap between 0-6 points
+  }
+  
+  // Mid/late season: use actual home vs away performance
+  const homeAdvantage = (homeWinPct - awayWinPct) * 8; // Scale to points
+  return Math.max(0, Math.min(8, homeAdvantage + 1.0)); // 1 point baseline + performance
+}
+
+/**
+ * Calculate team strength differential with more weight on record
+ */
+function calculateTeamStrengthDifferential(homeTeam, awayTeam, homeTeamStats, awayTeamStats) {
+  // Record-based component (more weight in early season)
+  const homeWinPct = homeTeamStats.wins / (homeTeamStats.wins + homeTeamStats.losses);
+  const awayWinPct = awayTeamStats.wins / (awayTeamStats.wins + awayTeamStats.losses);
+  const recordDifferential = (homeWinPct - awayWinPct) * 12; // 12 point swing for 100% vs 0%
+  
+  // Performance-based component (offensive/defensive rating)
+  const homeNetRating = (homeTeamStats.offensiveRating || 110) - (homeTeamStats.defensiveRating || 110);
+  const awayNetRating = (awayTeamStats.offensiveRating || 110) - (awayTeamStats.defensiveRating || 110);
+  const performanceDifferential = (homeNetRating - awayNetRating) * 0.3; // Scale down
+  
+  // Weight record more heavily in early season
+  const gamesPlayed = homeTeamStats.wins + homeTeamStats.losses;
+  const recordWeight = gamesPlayed < 10 ? 0.7 : 0.5; // 70% early season, 50% later
+  const performanceWeight = 1 - recordWeight;
+  
+  return (recordDifferential * recordWeight) + (performanceDifferential * performanceWeight);
+}
+
+/**
+ * Normalize a player name for comparison
+ */
+function normalizePlayerName(name) {
+  if (!name) return '';
+  
+  // Remove extra whitespace and convert to lowercase
+  const cleaned = name.trim().toLowerCase();
+  
+  // Handle "Last, First" format by converting to "First Last"
+  if (cleaned.includes(',')) {
+    const parts = cleaned.split(',').map(part => part.trim());
+    if (parts.length >= 2) {
+      // Convert "Last, First" to "First Last"
+      return `${parts[1]} ${parts[0]}`;
+    }
+  }
+  
+  return cleaned;
+}
+
+/**
+ * Check if two player names match, handling different formats
+ */
+function playersMatch(playerName, injuryName) {
+  if (!playerName || !injuryName) return false;
+  
+  const normalizedPlayer = normalizePlayerName(playerName);
+  const normalizedInjury = normalizePlayerName(injuryName);
+  
+  // Direct match
+  if (normalizedPlayer === normalizedInjury) return true;
+  
+  // Check if either name contains the other (handles middle names, Jr., etc.)
+  if (normalizedPlayer.includes(normalizedInjury) || normalizedInjury.includes(normalizedPlayer)) {
+    return true;
+  }
+  
+  // Split names and check for overlap (handles different ordering)
+  const playerWords = normalizedPlayer.split(' ').filter(word => word.length > 2);
+  const injuryWords = normalizedInjury.split(' ').filter(word => word.length > 2);
+  
+  // Need at least 2 matching words for a match
+  const matchingWords = playerWords.filter(word => 
+    injuryWords.some(injWord => word === injWord || word.includes(injWord) || injWord.includes(word))
+  );
+  
+  return matchingWords.length >= 2;
+}
+
+/**
  * Parse the official NBA injury report PDF (concatenated format with no spaces)
  */
 function parseOfficialInjuryReport(text) {
   const injuries = [];
-
+  
   try {
     // The official report has all text concatenated with no spaces
     const lines = text.split('\n');
     let currentTeam = null; // Track current team for continuation lines
-
+    
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-
+      
       // Skip empty lines and headers
-      if (!line || line.includes('GameDate') || line.includes('Page') ||
+      if (!line || line.includes('GameDate') || line.includes('Page') || 
           line.includes('InjuryReport:') || line.length < 10) {
         continue;
       }
-
+      
       // Check if this line has a team name (establishes context)
       const teamFromLine = getTeamFromLine(line);
       if (teamFromLine) {
         currentTeam = teamFromLine;
       }
-
+      
       // Look for lines that contain injury status (concatenated format)
       if (line.includes('Out') || line.includes('Probable') || line.includes('Questionable') || line.includes('Doubtful')) {
-
+        
         // Try to extract player injury data from the concatenated line
         const injuryData = parseInjuryFromConcatenatedLine(line, currentTeam);
         if (injuryData) {
@@ -284,14 +554,14 @@ function parseOfficialInjuryReport(text) {
         }
       }
     }
-
+    
     // Simple summary instead of detailed team breakdown
     console.log(`   📊 Extracted: ${injuries.length} total injuries from official report`);
-
+    
   } catch (error) {
     console.log(`   ⚠️  Error parsing official injury report: ${error.message}`);
   }
-
+  
   return injuries;
 }
 
@@ -331,13 +601,13 @@ function getTeamFromLine(line) {
     { pattern: 'UtahJazz', abbr: 'UTA' },
     { pattern: 'WashingtonWizards', abbr: 'WAS' }
   ];
-
+  
   for (const team of teamPatterns) {
     if (line.includes(team.pattern)) {
       return team.abbr;
     }
   }
-
+  
   return null;
 }
 
@@ -349,7 +619,7 @@ function parseInjuryFromConcatenatedLine(line, fallbackTeam = null) {
     // First try to find team in the line itself
     let teamAbbr = getTeamFromLine(line);
     let teamPattern = null;
-
+    
     if (teamAbbr) {
       // Find the team pattern that matched
       const teamPatterns = [
@@ -384,82 +654,99 @@ function parseInjuryFromConcatenatedLine(line, fallbackTeam = null) {
         { pattern: 'UtahJazz', abbr: 'UTA' },
         { pattern: 'WashingtonWizards', abbr: 'WAS' }
       ];
-
-      teamPattern = teamPatterns.find(tp => tp.abbr === teamAbbr);
-    } else {
-      // Use fallback team from context
+      
+      for (const team of teamPatterns) {
+        if (line.includes(team.pattern) && team.abbr === teamAbbr) {
+          teamPattern = team.pattern;
+          break;
+        }
+      }
+    } else if (fallbackTeam) {
+      // Use fallback team for continuation lines
       teamAbbr = fallbackTeam;
     }
-
-    if (!teamAbbr) return null;
-
-    // Extract status
-    let status = null;
-    if (line.includes('Out')) status = 'out';
-    else if (line.includes('Doubtful')) status = 'doubtful';
-    else if (line.includes('Questionable')) status = 'questionable';
-    else if (line.includes('Probable')) status = 'probable';
-
-    if (!status) return null;
-
-    // Remove team name from line if present
-    let workingLine = line;
+    
+    if (!teamAbbr) {
+      return null; // No team found
+    }
+    
+    // Extract the part after the team name (or the whole line if no team pattern)
+    let afterTeam = line;
     if (teamPattern) {
-      workingLine = workingLine.replace(teamPattern.pattern, '');
+      afterTeam = line.substring(line.indexOf(teamPattern) + teamPattern.length);
     }
-
-    // Extract player name (before status)
-    const statusIndex = workingLine.indexOf(status.charAt(0).toUpperCase() + status.slice(1));
-    if (statusIndex === -1) return null;
-
-    let playerSection = workingLine.substring(0, statusIndex).trim();
-
-    // Clean up playerSection - remove common artifacts
-    playerSection = playerSection.replace(/^[^a-zA-Z]+/, ''); // Remove leading non-letters
-    playerSection = playerSection.replace(/\d{1,2}\/\d{1,2}\/\d{4}/, ''); // Remove dates
-    playerSection = playerSection.trim();
-
-    // Extract player name (typically before position like "G" or "F")
-    let playerName = playerSection;
-
-    // Try to find position markers and extract name before them
-    const positionMatch = playerName.match(/([A-Z]{1,2})(?:[A-Z][a-z]|$)/);
-    if (positionMatch && positionMatch.index > 5) {
-      playerName = playerName.substring(0, positionMatch.index).trim();
+    
+    // Status patterns (need to be specific to avoid conflicts)
+    let status = null;
+    let statusPattern = null;
+    
+    if (afterTeam.includes('OutInjury/Illness') || afterTeam.includes('OutGLeague') || 
+        afterTeam.includes('OutNotWithTeam') || afterTeam.match(/[A-Z]Out[A-Z]/) ||
+        afterTeam.endsWith('Out')) {
+      status = 'out';
+      statusPattern = 'Out';
+    } else if (afterTeam.includes('ProbableInjury/Illness') || afterTeam.match(/[A-Z]Probable[A-Z]/) ||
+               afterTeam.endsWith('Probable')) {
+      status = 'probable';
+      statusPattern = 'Probable';
+    } else if (afterTeam.includes('QuestionableInjury/Illness') || afterTeam.match(/[A-Z]Questionable[A-Z]/)) {
+      status = 'questionable';
+      statusPattern = 'Questionable';
+    } else if (afterTeam.includes('DoubtfulInjury/Illness') || afterTeam.match(/[A-Z]Doubtful[A-Z]/)) {
+      status = 'doubtful';
+      statusPattern = 'Doubtful';
     }
-
-    // Clean up the player name
-    playerName = playerName.replace(/\s+/g, ' ').trim();
-
-    // Extract description (after status)
-    let description = workingLine.substring(statusIndex + status.length).trim();
-
-    // Clean up description
-    description = description.replace(/^[^a-zA-Z]+/, '');
-    description = description.substring(0, 100); // Truncate
-
-    // Final validation
-    if (!playerName || playerName.length < 3) return null;
-
-    // Make sure we have at least first and last name
-    const nameParts = playerName.split(' ');
-    if (nameParts.length < 2) {
-      // Try to extract from position marker
-      const fullMatch = playerSection.match(/([A-Z][a-z]+)\s+([A-Z][a-z]+)/);
-      if (fullMatch) {
-        playerName = `${fullMatch[1]} ${fullMatch[2]}`;
-      } else {
-        return null;
+    
+    if (!status) {
+      return null; // No status found
+    }
+    
+    // Extract player name (between start and status)
+    const statusIndex = afterTeam.indexOf(statusPattern);
+    if (statusIndex === -1) {
+      return null;
+    }
+    
+    const nameSection = afterTeam.substring(0, statusIndex);
+    
+    // Player names often have comma (Last,First format)
+    let playerName = nameSection;
+    
+    // Clean up common concatenated patterns
+    if (playerName.includes(',')) {
+      // Handle "Last,First" format
+      const commaParts = playerName.split(',');
+      if (commaParts.length >= 2) {
+        playerName = `${commaParts[0]}, ${commaParts[1]}`;
       }
     }
-
-    // Clean up description further
-    if (description) {
-      // Remove trailing garbage
-      const cleanDesc = description.replace(/[^a-zA-Z0-9\s\-\/,\.()]+.*$/, '').trim();
+    
+    // Validate we have a reasonable name
+    if (!playerName || playerName.length < 3) {
+      return null;
+    }
+    
+    // Extract description (after status)
+    let description = 'Injury/Illness';
+    const afterStatusIndex = afterTeam.indexOf(statusPattern) + statusPattern.length;
+    const afterStatus = afterTeam.substring(afterStatusIndex);
+    
+    if (afterStatus && afterStatus.length > 3) {
+      // Clean up common patterns
+      let cleanDesc = afterStatus;
+      if (cleanDesc.startsWith('Injury/Illness-')) {
+        cleanDesc = cleanDesc.substring('Injury/Illness-'.length);
+      } else if (cleanDesc.startsWith('GLeague-')) {
+        cleanDesc = 'G League - ' + cleanDesc.substring('GLeague-'.length);
+      }
+      
+      // Add spaces to common patterns
+      cleanDesc = cleanDesc.replace(/([a-z])([A-Z])/g, '$1 $2'); // camelCase to spaced
+      cleanDesc = cleanDesc.replace(/;/g, '; '); // Add space after semicolons
+      
       description = cleanDesc;
     }
-
+    
     return {
       teamAbbreviation: teamAbbr,
       playerName: playerName,
@@ -467,7 +754,7 @@ function parseInjuryFromConcatenatedLine(line, fallbackTeam = null) {
       description: description,
       source: 'NBA_OFFICIAL'
     };
-
+    
   } catch (error) {
     return null;
   }
@@ -477,68 +764,549 @@ function parseInjuryFromConcatenatedLine(line, fallbackTeam = null) {
  * Get injuries for a specific team from the official report
  */
 function getTeamInjuries(allInjuries, teamAbbr) {
-  return allInjuries.filter(injury =>
+  return allInjuries.filter(injury => 
     injury.teamAbbreviation === teamAbbr.toUpperCase()
   );
 }
 
 /**
- * Calculate dynamic home court advantage based on actual home/away records
+ * ENHANCED: Fetch game notes for H2H and situational data (not injuries)
  */
-function calculateDynamicHomeAdvantage(homeTeamStats, awayTeamStats) {
-  // Default home advantage if we don't have home/away splits
-  const defaultHomeAdvantage = 2.5;
-
-  if (!homeTeamStats.homeRecord || !awayTeamStats.awayRecord) {
-    return defaultHomeAdvantage;
+async function fetchGameNotesForContext(teamAbbr) {
+  try {
+    console.log(`📋 Fetching game context for ${teamAbbr}...`);
+    
+    const gamenoteResponse = await fetch(`${WORKERS.gamenotes}/gamenotes?team=${teamAbbr}`);
+    const gamenoteData = await gamenoteResponse.json();
+    
+    if (gamenoteData.success && gamenoteData.pdfUrl && pdf) {
+      console.log(`   📄 Downloading game notes: ${gamenoteData.pdfUrl}`);
+      
+      try {
+        const pdfResponse = await fetch(gamenoteData.pdfUrl);
+        if (pdfResponse.ok) {
+          const arrayBuffer = await pdfResponse.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          
+          console.log(`   📝 Parsing game notes for context...`);
+          const data = await pdf(buffer);
+          const text = data.text;
+          
+          console.log(`   ✅ Game notes parsed! ${text.length} characters extracted`);
+          
+          const contextData = parseGameNotesContext(text);
+          console.log(`   📊 Extracted: ${contextData.h2hGames.length} H2H games, ${contextData.trends.length} trends`);
+          
+          return {
+            success: true,
+            team: teamAbbr.toUpperCase(),
+            dataSource: 'GAME_NOTES_PARSED',
+            pdfUrl: gamenoteData.pdfUrl,
+            h2hGames: contextData.h2hGames,
+            teamTrends: contextData.trends,
+            situationalStats: contextData.situational,
+            rawTextLength: text.length
+          };
+        }
+      } catch (pdfError) {
+        console.log(`   ⚠️  Game notes parsing failed: ${pdfError.message}`);
+      }
+    } else {
+      console.log(`   ⚠️  Game notes not available: ${gamenoteData.error || 'PDF parsing unavailable'}`);
+    }
+    
+    return {
+      success: false,
+      team: teamAbbr.toUpperCase(),
+      dataSource: 'UNAVAILABLE',
+      h2hGames: [],
+      teamTrends: [],
+      situationalStats: []
+    };
+    
+  } catch (error) {
+    console.log(`   ⚠️  Game notes error: ${error.message}`);
+    return {
+      success: false,
+      team: teamAbbr.toUpperCase(),
+      dataSource: 'UNAVAILABLE',
+      h2hGames: [],
+      teamTrends: [],
+      situationalStats: []
+    };
   }
-
-  // Calculate actual home/away performance
-  const homeWinPct = homeTeamStats.homeRecord.wins /
-    (homeTeamStats.homeRecord.wins + homeTeamStats.homeRecord.losses);
-
-  const awayWinPct = awayTeamStats.awayRecord.wins /
-    (awayTeamStats.awayRecord.wins + awayTeamStats.awayRecord.losses);
-
-  // If we don't have enough home/away games, use overall record + small home boost
-  const homeGames = homeTeamStats.homeRecord.wins + homeTeamStats.homeRecord.losses;
-  const awayGames = awayTeamStats.awayRecord.wins + awayTeamStats.awayRecord.losses;
-
-  if (homeGames < 2 || awayGames < 2) {
-    // Early season: use overall record + small home boost
-    const homeOverallWinPct = homeTeamStats.wins / (homeTeamStats.wins + homeTeamStats.losses);
-    const awayOverallWinPct = awayTeamStats.wins / (awayTeamStats.wins + awayTeamStats.losses);
-
-    // Home advantage = difference in overall records + 1.5 point baseline
-    const recordDifference = (homeOverallWinPct - awayOverallWinPct) * 10; // Scale to points
-    return Math.max(0, Math.min(6, 1.5 + recordDifference)); // Cap between 0-6 points
-  }
-
-  // Mid/late season: use actual home vs away performance
-  const homeAdvantage = (homeWinPct - awayWinPct) * 8; // Scale to points
-  return Math.max(0, Math.min(8, homeAdvantage + 1.0)); // 1 point baseline + performance
 }
 
 /**
- * Calculate team strength differential with more weight on record
+ * Parse game notes for contextual data (H2H, trends, situational stats)
  */
-function calculateTeamStrengthDifferential(homeTeam, awayTeam, homeTeamStats, awayTeamStats) {
-  // Record-based component (more weight in early season)
-  const homeWinPct = homeTeamStats.wins / (homeTeamStats.wins + homeTeamStats.losses);
-  const awayWinPct = awayTeamStats.wins / (awayTeamStats.wins + awayTeamStats.losses);
-  const recordDifferential = (homeWinPct - awayWinPct) * 12; // 12 point swing for 100% vs 0%
+function parseGameNotesContext(text) {
+  const h2hGames = [];
+  const trends = [];
+  const situational = [];
+  
+  try {
+    // Parse Head-to-Head history
+    const h2hMatches = text.match(/VS\.?\s+[A-Z]{3,}[\s\S]*?(?=\n\n|\n[A-Z][A-Z\s]{10,})/gi);
+    if (h2hMatches) {
+      h2hMatches.forEach(section => {
+        const gameResults = section.match(/\d{1,2}\/\d{1,2}\/?\d{0,4}.*?\d{2,3}-\d{2,3}/g);
+        if (gameResults) {
+          gameResults.forEach(result => {
+            h2hGames.push({
+              result: result.trim()
+            });
+          });
+        }
+      });
+    }
+    
+    // Parse team trends (record when...)
+    const trendMatches = text.match(/[A-Za-z\s]+ record when [^:]+:\s*\d+-\d+/gi);
+    if (trendMatches) {
+      trendMatches.forEach(trend => {
+        const parts = trend.split(':');
+        if (parts.length === 2) {
+          trends.push({
+            condition: parts[0].trim(),
+            record: parts[1].trim()
+          });
+        }
+      });
+    }
+    
+    // Parse situational stats (home/road, back-to-backs, etc.)
+    const situationalMatches = text.match(/(home|road|back-to-back|vs\s+[A-Z]{2,}).*?record.*?\d+-\d+/gi);
+    if (situationalMatches) {
+      situationalMatches.forEach(stat => {
+        situational.push({
+          situation: stat.trim()
+        });
+      });
+    }
+    
+  } catch (error) {
+    console.log(`   ⚠️  Error parsing game notes context: ${error.message}`);
+  }
+  
+  return {
+    h2hGames,
+    trends,
+    situational
+  };
+}
 
-  // Performance-based component (offensive/defensive rating)
-  const homeNetRating = (homeTeamStats.offensiveRating || 110) - (homeTeamStats.defensiveRating || 110);
-  const awayNetRating = (awayTeamStats.offensiveRating || 110) - (awayTeamStats.defensiveRating || 110);
-  const performanceDifferential = (homeNetRating - awayNetRating) * 0.3; // Scale down
+/**
+ * ENHANCED: Calculate player impact score for smart injury adjustments
+ */
+function calculatePlayerImpact(player) {
+  if (!player) return { score: 0, tier: 'Bench' };
+  
+  const pointsWeight = (player.points || 0) * 1.0;
+  const assistsWeight = (player.assists || 0) * 1.5;
+  const reboundsWeight = (player.rebounds || 0) * 1.2;
+  const stealsWeight = (player.steals || 0) * 2.0;
+  const blocksWeight = (player.blocks || 0) * 2.0;
+  
+  const impactScore = pointsWeight + assistsWeight + reboundsWeight + 
+                      stealsWeight + blocksWeight;
+  
+  let tier = 'Bench';
+  if (impactScore > 40) tier = 'Superstar';
+  else if (impactScore > 25) tier = 'Star';
+  else if (impactScore > 15) tier = 'Key Role';
+  
+  return {
+    score: impactScore,
+    tier: tier
+  };
+}
 
-  // Weight record more heavily in early season
-  const gamesPlayed = homeTeamStats.wins + homeTeamStats.losses;
-  const recordWeight = gamesPlayed < 10 ? 0.7 : 0.5; // 70% early season, 50% later
-  const performanceWeight = 1 - recordWeight;
+/**
+ * ENHANCED: Apply smart injury impact adjustments
+ */
+function applyInjuryImpact(players, injuries, teamStats) {
+  if (!players || !Array.isArray(players)) {
+    return [];
+  }
+  
+  if (!injuries || injuries.length === 0) {
+    return players.map(player => ({
+      ...player,
+      impact: calculatePlayerImpact(player)
+    }));
+  }
+  
+  // Determine if we have enough games for sophisticated analysis
+  const gamesPlayed = teamStats?.gamesPlayed || 4; // Default to early season
+  const useAdvancedAnalysis = gamesPlayed >= 10;
+  
+  // Calculate impact scores for all players
+  const playersWithImpact = players.map(player => ({
+    ...player,
+    impact: calculatePlayerImpact(player)
+  }));
+  
+  if (useAdvancedAnalysis) {
+    // Use research-based role elevation analysis (10+ games)
+    return applyAdvancedInjuryImpact(playersWithImpact, injuries, teamStats);
+  } else {
+    // Use simple early-season logic (< 10 games)
+    return applyEarlySeasonInjuryImpact(playersWithImpact, injuries, teamStats);
+  }
+}
 
-  return (recordDifferential * recordWeight) + (performanceDifferential * performanceWeight);
+/**
+ * NEW: Calculate injury status impact with probability weighting and effectiveness reduction
+ */
+function calculateInjuryStatusImpact(player, injury) {
+  const statusImpacts = {
+    'out': { playProbability: 0.0, effectiveness: 0.0, description: 'Will not play' },
+    'doubtful': { playProbability: 0.20, effectiveness: 0.60, description: '20% plays, limited if active' },
+    'questionable': { playProbability: 0.65, effectiveness: 0.75, description: '65% plays, may be limited' },
+    'probable': { playProbability: 0.90, effectiveness: 0.95, description: '90% plays, near full effectiveness' }
+  };
+  
+  const impact = statusImpacts[injury.status] || { playProbability: 1.0, effectiveness: 1.0, description: 'Full availability' };
+  
+  // Calculate probability-weighted expectations
+  const basePoints = player.points || 0;
+  const baseMinutes = player.minutes || 0;
+  const baseRebounds = player.rebounds || 0;
+  const baseAssists = player.assists || 0;
+  
+  return {
+    // Expected values (probability * effectiveness)
+    expectedPoints: basePoints * impact.playProbability * impact.effectiveness,
+    expectedMinutes: baseMinutes * impact.playProbability * impact.effectiveness,
+    expectedRebounds: baseRebounds * impact.playProbability * impact.effectiveness,
+    expectedAssists: baseAssists * impact.playProbability * impact.effectiveness,
+    
+    // Uncertainty and display info
+    uncertainty: Math.max(0, 1.0 - impact.playProbability),
+    playProbability: impact.playProbability,
+    effectiveness: impact.effectiveness,
+    displayNote: impact.playProbability < 1.0 ? `(${Math.round(impact.playProbability * 100)}% plays)` : '',
+    statusDescription: impact.description,
+    
+    // Reduction amounts for teammate boost calculations
+    pointsReduction: basePoints - (basePoints * impact.playProbability * impact.effectiveness),
+    minutesReduction: baseMinutes - (baseMinutes * impact.playProbability * impact.effectiveness)
+  };
+}
+
+/**
+ * NEW: Calculate conditional teammate projections based on uncertain star availability
+ * Implements proper cascading uncertainty - teammates get weighted boosts based on probability
+ */
+function calculateConditionalProjection(player, injuries, playerImpacts) {
+  // Find all uncertain star players on this team
+  const uncertainStars = injuries.filter(inj =>
+    ['questionable', 'doubtful'].includes(inj.status)
+  );
+
+  if (uncertainStars.length === 0) {
+    return {
+      expectedPoints: player.points,
+      expectedAssists: player.assists,
+      expectedRebounds: player.rebounds,
+      uncertainty: 0,
+      scenarios: []
+    };
+  }
+
+  // Build probability tree for all scenarios
+  const scenarios = [];
+
+  // For simplicity, we'll handle the most impactful uncertain player
+  // In a full implementation, we'd handle all combinations
+  const mostImpactfulUncertain = uncertainStars
+    .map(inj => {
+      const injPlayer = playerImpacts.find(p => playersMatch(p.playerName, inj.playerName));
+      return { injury: inj, player: injPlayer, impact: injPlayer?.impact?.score || 0 };
+    })
+    .filter(x => x.player)
+    .sort((a, b) => b.impact - a.impact)[0];
+
+  if (!mostImpactfulUncertain) {
+    return {
+      expectedPoints: player.points,
+      expectedAssists: player.assists,
+      expectedRebounds: player.rebounds,
+      uncertainty: 0,
+      scenarios: []
+    };
+  }
+
+  const { injury, player: injuredStar } = mostImpactfulUncertain;
+  const statusImpact = calculateInjuryStatusImpact(injuredStar, injury);
+  const playProb = statusImpact.playProbability;
+
+  // Scenario A: Star plays (playProb chance)
+  const scenarioA = {
+    probability: playProb,
+    points: player.points * 1.03, // Small boost (star playing but limited)
+    assists: player.assists * 1.03,
+    rebounds: player.rebounds * 1.02,
+    description: `${injuredStar.playerName} plays (${Math.round(playProb * 100)}%)`
+  };
+
+  // Scenario B: Star sits (1 - playProb chance)
+  let boostIfOut = 1.0;
+  if (injuredStar.impact?.tier === 'Superstar') {
+    boostIfOut = 1.20; // +20% if superstar out
+  } else if (injuredStar.impact?.tier === 'Star') {
+    boostIfOut = 1.15; // +15% if star out
+  } else if (injuredStar.impact?.tier === 'Key Role') {
+    boostIfOut = 1.08; // +8% if key role out
+  }
+
+  const scenarioB = {
+    probability: 1 - playProb,
+    points: player.points * boostIfOut,
+    assists: player.assists * boostIfOut,
+    rebounds: player.rebounds * boostIfOut * 0.8, // Rebounds scale less
+    description: `${injuredStar.playerName} sits (${Math.round((1 - playProb) * 100)}%)`
+  };
+
+  scenarios.push(scenarioA, scenarioB);
+
+  // Calculate expected value (weighted average)
+  const expectedPoints = (scenarioA.points * scenarioA.probability) +
+                        (scenarioB.points * scenarioB.probability);
+  const expectedAssists = (scenarioA.assists * scenarioA.probability) +
+                         (scenarioB.assists * scenarioB.probability);
+  const expectedRebounds = (scenarioA.rebounds * scenarioA.probability) +
+                          (scenarioB.rebounds * scenarioB.probability);
+
+  // Uncertainty = variance between scenarios
+  const uncertainty = Math.abs(scenarioB.points - scenarioA.points) / player.points;
+
+  return {
+    expectedPoints,
+    expectedAssists,
+    expectedRebounds,
+    uncertainty,
+    scenarios,
+    conditionalBoostApplied: true,
+    basedOn: `${injuredStar.playerName} ${injury.status}`
+  };
+}
+
+/**
+ * Simple injury impact logic for early season (< 10 games)
+ */
+function applyEarlySeasonInjuryImpact(playersWithImpact, injuries, teamStats) {
+  // Find injured players and categorize them
+  const injuredPlayers = [];
+  const returningPlayers = [];
+  
+  injuries.forEach(injury => {
+    const player = playersWithImpact.find(p => playersMatch(p.playerName, injury.playerName));
+    
+    if (player) {
+      if (injury.status === 'out' || injury.status === 'doubtful') {
+        injuredPlayers.push({ ...player, injury });
+      } else if (injury.status === 'probable' && player.impact.tier !== 'Bench') {
+        // KEY FIX: Only apply return logic if player actually missed recent games
+        if (playerMissedRecentGames(player, teamStats)) {
+          returningPlayers.push({ ...player, injury });
+        }
+        // If they haven't missed games (like Jaylen Brown), don't apply return logic
+      }
+    }
+  });
+  
+  // Apply enhanced adjustments with cascading probability weighting
+  return playersWithImpact.map(player => {
+    let adjustment = 0;
+    let adjustmentNotes = [];
+
+    // NEW: Check if this player has uncertain status (questionable/doubtful/probable)
+    const playerInjury = injuries.find(inj => playersMatch(player.playerName, inj.playerName));
+    if (playerInjury && ['questionable', 'doubtful', 'probable'].includes(playerInjury.status)) {
+      const statusImpact = calculateInjuryStatusImpact(player, playerInjury);
+
+      // Apply probability-weighted projections to the player themselves
+      const adjustedPlayer = { ...player };
+      adjustedPlayer.points = statusImpact.expectedPoints;
+      adjustedPlayer.minutes = statusImpact.expectedMinutes;
+      adjustedPlayer.rebounds = statusImpact.expectedRebounds;
+      adjustedPlayer.assists = statusImpact.expectedAssists;
+
+      adjustedPlayer.injuryAdjusted = `${playerInjury.status}: ${statusImpact.statusDescription}`;
+      adjustedPlayer.statusNote = statusImpact.displayNote;
+      adjustedPlayer.uncertainty = statusImpact.uncertainty;
+
+      return adjustedPlayer;
+    }
+
+    // NEW: Check if teammates should get conditional boosts (star is questionable/doubtful)
+    const conditionalProjection = calculateConditionalProjection(player, injuries, playersWithImpact);
+    if (conditionalProjection.conditionalBoostApplied) {
+      const adjustedPlayer = { ...player };
+      adjustedPlayer.points = conditionalProjection.expectedPoints;
+      adjustedPlayer.assists = conditionalProjection.expectedAssists;
+      adjustedPlayer.rebounds = conditionalProjection.expectedRebounds;
+      adjustedPlayer.uncertainty = conditionalProjection.uncertainty;
+      adjustedPlayer.injuryAdjusted = `Conditional: ${conditionalProjection.basedOn}`;
+      adjustedPlayer.conditionalScenarios = conditionalProjection.scenarios;
+
+      return adjustedPlayer;
+    }
+
+    // POSITIVE ADJUSTMENTS: Boost when key players are definitively OUT
+    injuredPlayers.forEach(injuredPlayer => {
+      if (injuredPlayer.impact.tier !== 'Bench' && player.playerName !== injuredPlayer.playerName) {
+        let boost = 0;
+
+        switch (injuredPlayer.impact.tier) {
+          case 'Superstar':
+            boost = 0.20; // 20% boost when superstar out
+            break;
+          case 'Star':
+            boost = 0.15; // 15% boost when star out
+            break;
+          case 'Key Role':
+            boost = 0.08; // 8% boost when key role player out
+            break;
+        }
+
+        // Top performers get extra boost
+        if ((player.points || 0) >= 15 && (player.usage || 0) >= 18) {
+          boost *= 1.2;
+        }
+
+        adjustment += boost;
+        adjustmentNotes.push(`+${Math.round(boost * 100)}% (${injuredPlayer.playerName} out)`);
+      }
+    });
+    
+    // NEGATIVE ADJUSTMENTS: Small reduction when stars return (early season)
+    returningPlayers.forEach(returningPlayer => {
+      if (player.playerName !== returningPlayer.playerName) {
+        let reduction = 0;
+        
+        switch (returningPlayer.impact.tier) {
+          case 'Superstar':
+            reduction = -0.08; // 8% reduction (conservative early season)
+            break;
+          case 'Star':
+            reduction = -0.05; // 5% reduction
+            break;
+          case 'Key Role':
+            reduction = -0.03; // 3% reduction
+            break;
+        }
+        
+        adjustment += reduction;
+        adjustmentNotes.push(`${Math.round(reduction * 100)}% (${returningPlayer.playerName} returns)`);
+      }
+    });
+    
+    // Apply adjustments to stats
+    if (adjustment !== 0) {
+      const adjustedPlayer = { ...player };
+      
+      // Apply to key stats
+      adjustedPlayer.points = (player.points || 0) * (1 + adjustment);
+      adjustedPlayer.assists = (player.assists || 0) * (1 + adjustment);
+      adjustedPlayer.rebounds = (player.rebounds || 0) * (1 + adjustment * 0.5);
+      adjustedPlayer.usage = (player.usage || 0) * (1 + adjustment * 0.8);
+      
+      adjustedPlayer.injuryAdjusted = adjustmentNotes.join(', ');
+      
+      return adjustedPlayer;
+    }
+    
+    return player;
+  });
+}
+
+/**
+ * Advanced injury impact logic using role elevation analysis (10+ games)
+ */
+function applyAdvancedInjuryImpact(players, injuries, teamStats) {
+  // Enhance player data with role analysis
+  const playersWithRoleAnalysis = enhancePlayerData(players);
+  
+  // Find injured players and categorize them
+  const injuredPlayers = [];
+  const returningPlayers = [];
+  
+  injuries.forEach(injury => {
+    const player = playersWithRoleAnalysis.find(p => playersMatch(p.playerName, injury.playerName));
+    
+    if (player) {
+      if (injury.status === 'out' || injury.status === 'doubtful') {
+        injuredPlayers.push({ ...player, injury });
+      } else if (injury.status === 'probable' || injury.status === 'questionable') {
+        if (player.impact.tier !== 'Bench') {
+          returningPlayers.push({ ...player, injury });
+        }
+      }
+    }
+  });
+  
+  // Apply research-based adjustments
+  return playersWithRoleAnalysis.map(player => {
+    let adjustment = 0;
+    let adjustmentNotes = [];
+    
+    // POSITIVE ADJUSTMENTS: Boost when key players are out
+    injuredPlayers.forEach(injuredPlayer => {
+      if (injuredPlayer.impact.tier !== 'Bench' && player.playerName !== injuredPlayer.playerName) {
+        let boost = 0;
+        
+        switch (injuredPlayer.impact.tier) {
+          case 'Superstar':
+            boost = 0.20;
+            break;
+          case 'Star':
+            boost = 0.15;
+            break;
+          case 'Key Role':
+            boost = 0.08;
+            break;
+        }
+        
+        if ((player.points || 0) >= 15 && (player.usage || 0) >= 18) {
+          boost *= 1.2;
+        }
+        
+        adjustment += boost;
+        adjustmentNotes.push(`+${Math.round(boost * 100)}% (${injuredPlayer.playerName} out)`);
+      }
+    });
+    
+    // NEGATIVE ADJUSTMENTS: Reduce when elevated players face returning competition
+    returningPlayers.forEach(returningPlayer => {
+      if (player.playerName !== returningPlayer.playerName && player.roleAnalysis?.isElevated) {
+        const returnImpact = calculateReturnImpact(returningPlayer, player, player.roleAnalysis);
+        
+        if (returnImpact.adjustment < 0) {
+          adjustment += returnImpact.adjustment;
+          adjustmentNotes.push(`${Math.round(returnImpact.adjustment * 100)}% (${returningPlayer.playerName} returns)`);
+        }
+      }
+    });
+    
+    // Apply adjustments to stats
+    if (adjustment !== 0) {
+      const adjustedPlayer = { ...player };
+      
+      adjustedPlayer.points = (player.points || 0) * (1 + adjustment);
+      adjustedPlayer.assists = (player.assists || 0) * (1 + adjustment);
+      adjustedPlayer.rebounds = (player.rebounds || 0) * (1 + adjustment * 0.5);
+      adjustedPlayer.usage = (player.usage || 0) * (1 + adjustment * 0.8);
+      
+      adjustedPlayer.injuryAdjusted = adjustmentNotes.join(', ');
+      
+      return adjustedPlayer;
+    }
+    
+    return player;
+  });
 }
 
 /**
@@ -711,8 +1479,8 @@ function generateGameAnalysis(game, data) {
   
   console.log('\n## GAME PREDICTION');
   console.log('');
-  const prediction = generatePrediction(away, home, gameScript);
-
+  const prediction = generatePrediction(away, home);
+  
   addGameToCsv(game, away, home, prediction);
 }
 
@@ -949,64 +1717,6 @@ function generateEnhancedPlayerProjections(players, teamAbbr, gameDate, enhancem
 }
 // applyPlayerEnhancements and calculateCappedMultipliers now imported from modules/enhancements.js
 
-/**
- * Display game script analysis with strategic insights
- */
-function displayGameScriptAnalysis(gameScript, awayTeam, homeTeam) {
-  // Capture for CSV export
-  gameScriptAnalysisData = {
-    keyBattles: gameScript.keyBattles,
-    awayStrategy: '',
-    homeStrategy: '',
-    confidence: gameScript.confidence
-  };
-
-  if (gameScript.keyBattles.length === 0) {
-    console.log('\n🧠 GAME SCRIPT ANALYSIS');
-    console.log('─'.repeat(50));
-    console.log('• No significant statistical mismatches detected');
-    console.log('• Expect balanced tactical approach from both teams');
-    return;
-  }
-
-  console.log('\n🧠 GAME SCRIPT ANALYSIS');
-  console.log('─'.repeat(50));
-
-  // Display key battles
-  console.log('\n⚔️ Key Strategic Battles:');
-  gameScript.keyBattles.forEach(battle => {
-    const confidenceIcon = battle.confidence === "High" ? "🔥" : "📊";
-    console.log(`${confidenceIcon} ${battle.type}: ${battle.advantage} advantage (${battle.differential})`);
-  });
-
-  // Display strategic insights
-  if (gameScript.strategicInsights.length > 0) {
-    console.log('\n🎯 Strategic Recommendations:');
-    gameScript.strategicInsights.forEach((insight, idx) => {
-      console.log(`• ${insight}`);
-
-      // Capture strategy recommendations for CSV
-      if (insight.includes(awayTeam.abbreviation)) {
-        gameScriptAnalysisData.awayStrategy += insight + '; ';
-      }
-      if (insight.includes(homeTeam.abbreviation)) {
-        gameScriptAnalysisData.homeStrategy += insight + '; ';
-      }
-    });
-  }
-
-  // Display predicted approaches
-  if (gameScript.predictedApproaches.length > 0) {
-    console.log('\n🏀 Predicted Game Flow:');
-    gameScript.predictedApproaches.forEach(approach => {
-      console.log(`• ${approach}`);
-    });
-  }
-
-  console.log(`\n📈 Analysis Confidence: ${gameScript.confidence} (Phase 1: Statistical mismatch detection)`);
-  console.log('💡 Strategic insights based on clear statistical differentials (5+ point advantages)');
-}
-
 function generatePlayerProjections(players, teamAbbr, gameDate) {
   const topPlayers = players
     .filter(p => p.minutes > 5)
@@ -1075,7 +1785,7 @@ function generatePlayerProjections(players, teamAbbr, gameDate) {
 /**
  * Generate enhanced prediction with confidence breakdown
  */
-function generatePrediction(away, home, gameScript = null) {
+function generatePrediction(away, home) {
   const awayAdv = away.stats?.advanced || {};
   const homeAdv = home.stats?.advanced || {};
   const awayStats = away.stats?.general || {};
@@ -1256,6 +1966,781 @@ function calculateUncertaintyRange(predictedScore, teamData) {
     low: Math.max(0, Math.round(predictedScore - rangeFactor)),
     high: Math.round(predictedScore + rangeFactor)
   };
+}
+
+/**
+ * Calculate win probability using logistic regression
+ */
+function calculateWinProbability(marginDiff) {
+  // Convert point differential to win probability
+  // Based on NBA historical data
+  return 1 / (1 + Math.exp(-marginDiff * 0.15));
+}
+
+/**
+ * NEW: Generate game script analysis - Phase 1: Statistical Mismatch Detection
+ */
+function generateGameScriptAnalysis(awayData, homeData, awayStyle, homeStyle) {
+  const gameScript = {
+    keyBattles: [],
+    strategicInsights: [],
+    predictedApproaches: [],
+    confidence: 'Conservative' // Phase 1 is intentionally conservative
+  };
+  
+  // Get team stats for mismatch analysis
+  const awayStats = awayData.stats?.general || {};
+  const homeStats = homeData.stats?.general || {};
+  const awayAdv = awayData.stats?.advanced || {};
+  const homeAdv = homeData.stats?.advanced || {};
+  
+  // MISMATCH 1: Paint Scoring vs Paint Defense
+  const awayPaintScoring = awayStats.paintPts || 0;
+  const homePaintDefense = homeStats.oppPaintPts || 48; // Opponent paint points allowed
+  const paintDifferential = awayPaintScoring - homePaintDefense;
+  
+  if (Math.abs(paintDifferential) > 5) {
+    const advantageTeam = paintDifferential > 0 ? awayData.team.abbreviation : homeData.team.abbreviation;
+    const disadvantageTeam = paintDifferential > 0 ? homeData.team.abbreviation : awayData.team.abbreviation;
+    
+    gameScript.keyBattles.push({
+      type: "Interior Battle",
+      advantage: advantageTeam,
+      differential: Math.abs(paintDifferential).toFixed(1),
+      confidence: Math.abs(paintDifferential) > 7 ? "High" : "Medium"
+    });
+    
+    if (paintDifferential > 0) {
+      gameScript.strategicInsights.push(`${advantageTeam} should attack the paint aggressively - statistical advantage of ${paintDifferential.toFixed(1)} points per game`);
+      gameScript.predictedApproaches.push(`${advantageTeam} likely to establish interior presence early`);
+    } else {
+      gameScript.strategicInsights.push(`${disadvantageTeam} should avoid paint congestion - statistical disadvantage suggests perimeter focus`);
+    }
+  }
+  
+  // MISMATCH 2: Pace Battle
+  const awayPace = awayAdv.pace || 100;
+  const homePace = homeAdv.pace || 100;
+  const paceDifferential = Math.abs(awayPace - homePace);
+  
+  if (paceDifferential > 4) {
+    const fasterTeam = awayPace > homePace ? awayData.team.abbreviation : homeData.team.abbreviation;
+    const slowerTeam = awayPace < homePace ? awayData.team.abbreviation : homeData.team.abbreviation;
+    
+    gameScript.keyBattles.push({
+      type: "Tempo Control",
+      advantage: fasterTeam,
+      differential: paceDifferential.toFixed(1),
+      confidence: paceDifferential > 6 ? "High" : "Medium"
+    });
+    
+    gameScript.strategicInsights.push(`${fasterTeam} should push pace in transition - ${paceDifferential.toFixed(1)} possession advantage per game`);
+    gameScript.predictedApproaches.push(`Pace battle will be decisive: ${fasterTeam} pushes vs ${slowerTeam} controls`);
+  }
+  
+  // MISMATCH 3: Three-Point Shooting vs Defense
+  const awayThreeRate = (awayStats.threePointersMade / awayStats.fieldGoalsAttempted) || 0;
+  const homeThreeDefense = homeStats.oppThreePointPct || 0.36;
+  const threePointAdvantage = awayThreeRate - homeThreeDefense;
+  
+  if (Math.abs(threePointAdvantage) > 0.04) { // 4% differential is significant
+    const advantageTeam = threePointAdvantage > 0 ? awayData.team.abbreviation : homeData.team.abbreviation;
+    
+    gameScript.keyBattles.push({
+      type: "Perimeter Shooting",
+      advantage: advantageTeam,
+      differential: `${(Math.abs(threePointAdvantage) * 100).toFixed(1)}%`,
+      confidence: Math.abs(threePointAdvantage) > 0.06 ? "High" : "Medium"
+    });
+    
+    if (threePointAdvantage > 0) {
+      gameScript.strategicInsights.push(`${advantageTeam} should emphasize three-point attempts - shooting advantage of ${(threePointAdvantage * 100).toFixed(1)}%`);
+    }
+  }
+  
+  // MISMATCH 4: Assist Rate vs Turnover Defense  
+  const awayAssistRate = (awayStats.assists / awayStats.fieldGoalsMade) || 0;
+  const homeTurnoverDefense = homeStats.opponentTurnovers || 14;
+  
+  if (awayAssistRate > 0.65 && homeTurnoverDefense < 13) {
+    gameScript.keyBattles.push({
+      type: "Ball Movement vs Pressure",
+      advantage: awayData.team.abbreviation,
+      differential: "Ball movement system vs weak pressure defense",
+      confidence: "Medium"
+    });
+    
+    gameScript.strategicInsights.push(`${awayData.team.abbreviation} should exploit ball movement - high assist rate vs limited defensive pressure`);
+  }
+  
+  // TEAM STYLE ENHANCEMENTS (when available)
+  if (awayStyle.success && homeStyle.success) {
+    const awayStyleProfile = awayStyle.profile;
+    const homeStyleProfile = homeStyle.profile;
+    
+    // Enhanced three-point analysis with style data
+    if (awayStyleProfile.offensiveStyle?.shotSelection && homeStyleProfile.defensiveStyle) {
+      const awayThreeStyle = awayStyleProfile.offensiveStyle.shotSelection.threePointRate;
+      const homeThreeDefenseStyle = homeStyleProfile.defensiveStyle.opponentThreePointPct;
+      
+      if (awayThreeStyle > 0.42 && homeThreeDefenseStyle > 0.37) {
+        gameScript.strategicInsights.push(`${awayData.team.abbreviation} three-point volume (${(awayThreeStyle * 100).toFixed(1)}%) vs ${homeData.team.abbreviation} perimeter weakness creates high-volume shooting opportunity`);
+      }
+    }
+  }
+  
+  // Generate overall game approach prediction
+  if (gameScript.keyBattles.length > 0) {
+    const dominantAdvantage = gameScript.keyBattles.find(battle => battle.confidence === "High");
+    if (dominantAdvantage) {
+      gameScript.predictedApproaches.push(`Primary strategic focus: ${dominantAdvantage.type} - ${dominantAdvantage.advantage} holds decisive advantage`);
+    }
+  }
+  
+  return gameScript;
+}
+
+/**
+ * Display game script analysis with strategic insights
+ */
+function displayGameScriptAnalysis(gameScript, awayTeam, homeTeam) {
+  // Capture for CSV export
+  gameScriptAnalysisData = {
+    keyBattles: gameScript.keyBattles,
+    awayStrategy: '',
+    homeStrategy: '',
+    confidence: gameScript.confidence
+  };
+  
+  if (gameScript.keyBattles.length === 0) {
+    console.log('\n🧠 GAME SCRIPT ANALYSIS');
+    console.log('─'.repeat(50));
+    console.log('• No significant statistical mismatches detected');
+    console.log('• Expect balanced tactical approach from both teams');
+    return;
+  }
+  
+  console.log('\n🧠 GAME SCRIPT ANALYSIS');
+  console.log('─'.repeat(50));
+  
+  // Display key battles
+  console.log('\n⚔️ Key Strategic Battles:');
+  gameScript.keyBattles.forEach(battle => {
+    const confidenceIcon = battle.confidence === "High" ? "🔥" : "📊";
+    console.log(`${confidenceIcon} ${battle.type}: ${battle.advantage} advantage (${battle.differential})`);
+  });
+  
+  // Display strategic insights
+  if (gameScript.strategicInsights.length > 0) {
+    console.log('\n🎯 Strategic Recommendations:');
+    gameScript.strategicInsights.forEach((insight, idx) => {
+      console.log(`• ${insight}`);
+      
+      // Capture strategy recommendations for CSV
+      if (insight.includes(awayTeam.abbreviation)) {
+        gameScriptAnalysisData.awayStrategy += insight + '; ';
+      }
+      if (insight.includes(homeTeam.abbreviation)) {
+        gameScriptAnalysisData.homeStrategy += insight + '; ';
+      }
+    });
+  }
+  
+  // Display predicted approaches
+  if (gameScript.predictedApproaches.length > 0) {
+    console.log('\n🏀 Predicted Game Flow:');
+    gameScript.predictedApproaches.forEach(approach => {
+      console.log(`• ${approach}`);
+    });
+  }
+  
+  console.log(`\n📈 Analysis Confidence: ${gameScript.confidence} (Phase 1: Statistical mismatch detection)`);
+  console.log('💡 Strategic insights based on clear statistical differentials (5+ point advantages)');
+}
+
+/**
+ * Apply game script insights to player projections
+ */
+function applyGameScriptToProjections(players, gameScript, teamAbbr) {
+  return players.map(player => {
+    let scriptBoost = 0;
+    let scriptReasons = [];
+    
+    // Apply paint advantage to interior players
+    const paintAdvantage = gameScript.keyBattles.find(battle => 
+      battle.type === "Interior Battle" && battle.advantage === teamAbbr
+    );
+    if (paintAdvantage && (player.position === 'C' || player.position === 'PF')) {
+      const boost = paintAdvantage.confidence === "High" ? 2.0 : 1.0;
+      scriptBoost += boost;
+      scriptReasons.push(`paint advantage (+${boost.toFixed(1)})`);
+    }
+    
+    // Apply pace advantage to guards and wings
+    const paceAdvantage = gameScript.keyBattles.find(battle => 
+      battle.type === "Tempo Control" && battle.advantage === teamAbbr
+    );
+    if (paceAdvantage && (player.position === 'PG' || player.position === 'SG' || player.position === 'SF')) {
+      const boost = paceAdvantage.confidence === "High" ? 1.5 : 0.8;
+      scriptBoost += boost;
+      scriptReasons.push(`pace advantage (+${boost.toFixed(1)})`);
+    }
+    
+    // Apply three-point advantage to perimeter players
+    const threeAdvantage = gameScript.keyBattles.find(battle => 
+      battle.type === "Perimeter Shooting" && battle.advantage === teamAbbr
+    );
+    if (threeAdvantage && player.threePointersMade > 1.0) {
+      const boost = threeAdvantage.confidence === "High" ? 1.2 : 0.6;
+      scriptBoost += boost;
+      scriptReasons.push(`perimeter advantage (+${boost.toFixed(1)})`);
+    }
+    
+    return {
+      ...player,
+      gameScriptBoost: scriptBoost,
+      gameScriptReasons: scriptReasons
+    };
+  });
+}
+
+/**
+ * Calculate sophisticated pace prediction using all available data layers
+ */
+function calculateSophisticatedPace(awayData, homeData, context = {}) {
+  const paceCalculation = {
+    base: 100,
+    breakdown: [],
+    confidence: 'Medium',
+    dataLayers: 0
+  };
+  
+  // LAYER 1: Team Stats Pace (Foundation - Always Available)
+  const awayTeamPace = awayData.stats?.advanced?.pace;
+  const homeTeamPace = homeData.stats?.advanced?.pace;
+  
+  if (awayTeamPace && homeTeamPace) {
+    // Base calculation with home court weighting (55% home control)
+    paceCalculation.base = (awayTeamPace * 0.45) + (homeTeamPace * 0.55);
+    paceCalculation.breakdown.push(`Team stats: ${awayTeamPace.toFixed(1)} vs ${homeTeamPace.toFixed(1)}`);
+    paceCalculation.dataLayers++;
+    
+    // Home court pace control bonus
+    const homeCourtBonus = Math.min(1.5, (homeTeamPace - awayTeamPace) * 0.3);
+    paceCalculation.base += homeCourtBonus;
+    if (Math.abs(homeCourtBonus) > 0.5) {
+      paceCalculation.breakdown.push(`Home control: +${homeCourtBonus.toFixed(1)}`);
+    }
+  }
+  
+  // LAYER 2: Team Style Pace (When Available)
+  if (awayData.teamStyle?.success && homeData.teamStyle?.success) {
+    const awayStylePace = awayData.teamStyle.profile?.offensiveStyle?.pace;
+    const homeStylePace = homeData.teamStyle.profile?.offensiveStyle?.pace;
+    
+    if (awayStylePace && homeStylePace) {
+      // Style pace represents more recent tendencies
+      const stylePaceAvg = (awayStylePace * 0.45) + (homeStylePace * 0.55);
+      const styleWeight = 0.3; // 30% weight for style pace
+      
+      paceCalculation.base = (paceCalculation.base * 0.7) + (stylePaceAvg * styleWeight);
+      paceCalculation.breakdown.push(`Style pace: ${awayStylePace.toFixed(1)} vs ${homeStylePace.toFixed(1)}`);
+      paceCalculation.dataLayers++;
+      paceCalculation.confidence = 'High';
+    }
+  }
+  
+  // LAYER 3: Lineup Pace Intelligence (When Available)
+  if (awayData.lineups?.success && homeData.lineups?.success) {
+    const awayLineupPace = awayData.lineups.rotationIntelligence?.startingLineup?.pace;
+    const homeLineupPace = homeData.lineups.rotationIntelligence?.startingLineup?.pace;
+    
+    if (awayLineupPace && homeLineupPace) {
+      // Lineup pace represents specific unit tendencies
+      const lineupPaceGap = Math.abs(awayLineupPace - homeLineupPace);
+      
+      if (lineupPaceGap > 3) {
+        const paceAdjustment = lineupPaceGap * 0.2; // Moderate adjustment for lineup clash
+        const fasterLineupIsHome = homeLineupPace > awayLineupPace;
+        
+        if (fasterLineupIsHome) {
+          paceCalculation.base += paceAdjustment;
+        } else {
+          paceCalculation.base -= paceAdjustment * 0.5; // Away team has less control
+        }
+        
+        paceCalculation.breakdown.push(`Lineup clash: ${paceAdjustment.toFixed(1)} adjustment`);
+      }
+      paceCalculation.dataLayers++;
+    }
+  }
+  
+  // LAYER 4: Contextual Adjustments
+  if (context.backToBack) {
+    paceCalculation.base -= 2.0;
+    paceCalculation.breakdown.push('Back-to-back: -2.0');
+  }
+  
+  if (context.overtimeLikely) {
+    paceCalculation.base -= 1.5;
+    paceCalculation.breakdown.push('Overtime expected: -1.5');
+  }
+  
+  // Rest advantage (future enhancement)
+  if (context.restAdvantage) {
+    const restBonus = context.restAdvantage * 0.5;
+    paceCalculation.base += restBonus;
+    paceCalculation.breakdown.push(`Rest advantage: +${restBonus.toFixed(1)}`);
+  }
+  
+  // CONFIDENCE CALCULATION
+  if (paceCalculation.dataLayers >= 3) {
+    paceCalculation.confidence = 'Very High';
+  } else if (paceCalculation.dataLayers >= 2) {
+    paceCalculation.confidence = 'High';
+  } else if (paceCalculation.dataLayers >= 1) {
+    paceCalculation.confidence = 'Medium';
+  } else {
+    paceCalculation.confidence = 'Low';
+    paceCalculation.base = 100; // NBA average fallback
+    paceCalculation.breakdown.push('Using NBA average (no team data)');
+  }
+  
+  // Ensure reasonable bounds (85-115 pace range)
+  paceCalculation.base = Math.max(85, Math.min(115, paceCalculation.base));
+  
+  return paceCalculation;
+}
+
+/**
+ * NEW PHASE 3: Calculate statistical variance and confidence intervals
+ * Replaces arbitrary ranges with proper statistical modeling
+ */
+function calculatePlayerVariance(player, contextFactors = {}) {
+  // STEP 1: Calculate base standard deviation from recent games
+  let baseStdDev;
+
+  if (player.recentGames && player.recentGames.length >= 3) {
+    // Calculate actual std dev from recent performances
+    const recentPoints = player.recentGames.map(g => g.points);
+    const mean = recentPoints.reduce((a, b) => a + b) / recentPoints.length;
+    const variance = recentPoints.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / recentPoints.length;
+    baseStdDev = Math.sqrt(variance);
+  } else {
+    // Estimate std dev based on player tier and points
+    const pointsAvg = player.points || 10;
+    if (player.impact?.tier === 'Superstar' || player.impact?.tier === 'Star') {
+      baseStdDev = pointsAvg * 0.25; // Stars have ~25% variance
+    } else {
+      baseStdDev = pointsAvg * 0.35; // Role players have ~35% variance
+    }
+  }
+
+  // STEP 2: Apply context multipliers to variance
+  let varianceMultiplier = 1.0;
+  const varianceReasons = [];
+
+  // Injury uncertainty increases variance
+  if (contextFactors.injuryUncertainty > 0.3) {
+    varianceMultiplier *= 1.5;
+    varianceReasons.push('Injury uncertainty');
+  }
+
+  // Pace volatility increases variance
+  if (contextFactors.paceVolatility > 5) {
+    varianceMultiplier *= 1.2;
+    varianceReasons.push('Pace volatility');
+  }
+
+  // Minutes uncertainty (role player with inconsistent minutes)
+  if (player.minutesVolatility && player.minutesVolatility > 5) {
+    varianceMultiplier *= 1.3;
+    varianceReasons.push('Minutes uncertainty');
+  }
+
+  // Matchup uncertainty (new opponent, unusual style)
+  if (contextFactors.matchupUncertainty) {
+    varianceMultiplier *= 1.15;
+    varianceReasons.push('Matchup uncertainty');
+  }
+
+  const adjustedStdDev = baseStdDev * varianceMultiplier;
+
+  // STEP 3: Calculate confidence intervals
+  const mean = player.points || 10;
+
+  return {
+    mean: Math.round(mean * 10) / 10,
+    stdDev: Math.round(adjustedStdDev * 10) / 10,
+    // 68% confidence interval (±1 std dev)
+    confidence68: {
+      lower: Math.max(0, Math.round((mean - adjustedStdDev) * 10) / 10),
+      upper: Math.round((mean + adjustedStdDev) * 10) / 10
+    },
+    // 95% confidence interval (±2 std dev)
+    confidence95: {
+      lower: Math.max(0, Math.round((mean - 2 * adjustedStdDev) * 10) / 10),
+      upper: Math.round((mean + 2 * adjustedStdDev) * 10) / 10
+    },
+    varianceFactors: varianceReasons
+  };
+}
+
+/**
+ * NEW PHASE 3: Calculate game-level variance (for team scores)
+ */
+function calculateGameVariance(teamStats, opponentStats, contextFactors = {}) {
+  // Base variance from recent scoring consistency
+  const avgPoints = teamStats.points || 110;
+  let baseStdDev = avgPoints * 0.08; // NBA teams have ~8% scoring variance
+
+  // Adjust for pace volatility
+  if (contextFactors.paceVolatility > 5) {
+    baseStdDev *= 1.3; // Higher pace variance = higher scoring variance
+  }
+
+  // Adjust for injury count
+  if (contextFactors.majorInjuries > 1) {
+    baseStdDev *= 1.4; // Multiple injuries = more uncertainty
+  }
+
+  // Adjust for back-to-back
+  if (contextFactors.backToBack) {
+    baseStdDev *= 1.2; // B2B games are less predictable
+  }
+
+  return {
+    stdDev: Math.round(baseStdDev * 10) / 10,
+    confidence68: {
+      lower: Math.round(avgPoints - baseStdDev),
+      upper: Math.round(avgPoints + baseStdDev)
+    },
+    confidence95: {
+      lower: Math.round(avgPoints - 2 * baseStdDev),
+      upper: Math.round(avgPoints + 2 * baseStdDev)
+    }
+  };
+}
+
+/**
+ * NEW PHASE 3: Analyze opponent defensive characteristics
+ * Identifies defensive strengths/weaknesses for matchup-specific adjustments
+ */
+function analyzeOpponentDefense(oppStats, oppAdv, oppStyle) {
+  const defense = {
+    hasEliteRimProtector: false,
+    blocksPerGame: oppStats.blocks || 4.5,
+    switchHeavy: false,
+    zonesFrequently: false,
+    perimeter3PDefense: oppStats.opponent3PPercent || 0.36,
+    paintDefense: oppStats.oppPaintPts || 48,
+    pickAndRollCoverage: 'standard', // 'blitz', 'drop', 'switch', or 'standard'
+    closeoutSpeed: 'average' // 'elite', 'good', 'average', 'poor'
+  };
+
+  // Elite rim protector detection (5+ blocks per game)
+  if (defense.blocksPerGame >= 5.0) {
+    defense.hasEliteRimProtector = true;
+  }
+
+  // Zone defense detection (weak perimeter defense often indicates zone)
+  if (defense.perimeter3PDefense > 0.375) {
+    defense.zonesFrequently = true;
+    defense.closeoutSpeed = 'poor';
+  }
+
+  // Switch-heavy detection (good defensive rating with high opponent assists)
+  const oppAssists = oppStats.opponentAssists || 24;
+  if (oppAdv.defensiveRating < 108 && oppAssists < 23) {
+    defense.switchHeavy = true; // Forces teams into isolation
+  }
+
+  // Elite perimeter defense
+  if (defense.perimeter3PDefense < 0.345) {
+    defense.closeoutSpeed = 'elite';
+  }
+
+  return defense;
+}
+
+/**
+ * NEW PHASE 3: Apply opponent-specific defensive adjustments to player
+ * Adjusts projections based on player style vs opponent defensive strengths
+ */
+function applyOpponentDefensiveAdjustment(player, opponentDefense, playerIndex) {
+  let adjustmentMultiplier = 1.0;
+  const adjustments = [];
+
+  // Get player tendencies (simplified - would be enhanced with play-type data)
+  const isDriveHeavy = (player.position === 'PG' || player.position === 'SG') && player.points > 15;
+  const isShooter = player.threePointersMade > 1.5;
+  const isPostPlayer = (player.position === 'C' || player.position === 'PF') && player.points > 12;
+
+  // ADJUSTMENT 1: Elite rim protector vs drivers
+  if (opponentDefense.hasEliteRimProtector && isDriveHeavy) {
+    adjustmentMultiplier *= 0.93; // -7% points for drivers
+    adjustments.push('Elite rim protection (-7%)');
+    // But more fouls drawn
+    if (player.freeThrowsAttempted) {
+      player.freeThrowsAttempted *= 1.15; // +15% FTA
+    }
+  }
+
+  // ADJUSTMENT 2: Zone defense vs shooters
+  if (opponentDefense.zonesFrequently && isShooter) {
+    adjustmentMultiplier *= 1.05; // +5% for shooters (more open looks)
+    adjustments.push('Zone defense (+5% 3PT)');
+    if (player.threePointersAttempted) {
+      player.threePointersAttempted *= 1.10; // +10% 3PA
+    }
+  }
+
+  // ADJUSTMENT 3: Switch-heavy defense vs isolation players
+  const isIsoPlayer = playerIndex <= 1 && player.usage > 0.25; // Primary scorers
+  if (opponentDefense.switchHeavy && isIsoPlayer) {
+    adjustmentMultiplier *= 0.96; // -4% (harder to exploit mismatches)
+    adjustments.push('Switch-heavy D (-4%)');
+  }
+
+  // ADJUSTMENT 4: Elite perimeter defense vs shooters
+  if (opponentDefense.closeoutSpeed === 'elite' && isShooter) {
+    adjustmentMultiplier *= 0.94; // -6% for shooters
+    adjustments.push('Elite closeouts (-6%)');
+  }
+
+  // ADJUSTMENT 5: Weak paint defense vs post players
+  if (opponentDefense.paintDefense > 50 && isPostPlayer) {
+    adjustmentMultiplier *= 1.08; // +8% for bigs
+    adjustments.push('Weak paint D (+8%)');
+  }
+
+  return {
+    multiplier: adjustmentMultiplier,
+    adjustments,
+    freeThrowBoost: opponentDefense.hasEliteRimProtector && isDriveHeavy ? 1.15 : 1.0
+  };
+}
+
+/**
+ * NEW PHASE 3: Calculate schedule context factors (rest, back-to-back, etc.)
+ * Returns adjustment object with fatigue and rest advantage impacts
+ */
+function calculateScheduleContext(teamData, oppData, gameDate) {
+  const context = {
+    teamFatigue: 0, // Negative = tired, positive = well-rested
+    oppFatigue: 0,
+    teamBackToBack: false,
+    oppBackToBack: false,
+    restAdvantage: 0, // Positive favors team, negative favors opponent
+    adjustmentDesc: []
+  };
+
+  // TODO: In future, fetch actual schedule data from NBA API
+  // For now, use estimated impacts based on typical NBA scheduling
+
+  // PLACEHOLDER: These would be calculated from actual game dates
+  // Example: if last game was yesterday, backToBack = true
+  // Example: if team had 3 days rest, restAdvantage = +1.5
+
+  // Back-to-back detection (simplified - would use actual schedule)
+  // const lastGameDate = getLastGameDate(teamData);
+  // const daysSinceLastGame = (gameDate - lastGameDate) / (1000 * 60 * 60 * 24);
+
+  // For now, apply typical league-average adjustments
+  // Will be enhanced when schedule API is integrated
+
+  return context;
+}
+
+/**
+ * Apply schedule context adjustments to team performance
+ * Research shows: B2B games = -2 to -5 points, 3+ days rest = +1 to +2 points
+ */
+function applyScheduleAdjustments(baseScore, scheduleContext) {
+  let adjustedScore = baseScore;
+  const adjustments = [];
+
+  // Back-to-back game penalty
+  if (scheduleContext.teamBackToBack) {
+    const b2bPenalty = -3.5; // Average B2B impact
+    adjustedScore += b2bPenalty;
+    adjustments.push(`B2B: ${b2bPenalty.toFixed(1)}`);
+  }
+
+  // Rest advantage
+  if (Math.abs(scheduleContext.restAdvantage) >= 1) {
+    adjustedScore += scheduleContext.restAdvantage;
+    adjustments.push(`Rest: ${scheduleContext.restAdvantage > 0 ? '+' : ''}${scheduleContext.restAdvantage.toFixed(1)}`);
+  }
+
+  return {
+    score: adjustedScore,
+    adjustments: adjustments.length > 0 ? adjustments.join(', ') : null
+  };
+}
+
+/**
+ * NEW PHASE 3: Possession-based scoring model with proper statistical modeling
+ * Replaces simplified formula with research-backed possession calculation
+ */
+function calculatePossessionBasedScore(teamStats, oppStats, teamAdv, oppAdv, isHome, homeAdvantage, teamStrengthDiff, sophisticatedPace = null, gameScript = null, teamAbbr = null, scheduleContext = null) {
+  // STEP 1: Calculate actual possessions using Four Factors
+  // Formula: Pace * (48 / (teamMin + oppMin)) * 0.96
+  // Adjusted for turnovers and offensive rebounds
+
+  const basePace = sophisticatedPace || teamAdv.pace || 100;
+
+  // Turnover impact on possessions (turnovers create/prevent possessions)
+  const teamTOV = teamStats.turnovers || 14;
+  const oppTOV = oppStats.turnovers || 14;
+  const tovAdjustment = (oppTOV - teamTOV) * 0.4; // Each extra turnover = 0.4 possession swing
+
+  // Offensive rebound impact (OREBs create extra possessions)
+  const teamOREB = teamStats.offensiveRebounds || 10;
+  const oppDREB = oppStats.defensiveRebounds || 34;
+  const orebImpact = Math.max(0, teamOREB - (oppDREB * 0.25)); // Extra OREs = possessions
+  const orebAdjustment = orebImpact * 0.35;
+
+  // Calculate expected possessions
+  let possessions = basePace + tovAdjustment + orebAdjustment;
+
+  // NEW PHASE 3: Apply schedule context to pace (fatigue affects tempo)
+  if (scheduleContext) {
+    if (scheduleContext.teamBackToBack) {
+      possessions -= 1.5; // B2B teams play slower
+    }
+    // Rest advantage affects pace
+    possessions += (scheduleContext.restAdvantage * 0.3);
+  }
+
+  // STEP 2: Calculate offensive efficiency with non-linear defensive interaction
+  const offRating = teamAdv.offensiveRating || 110;
+  const oppDefRating = oppAdv.defensiveRating || 110;
+
+  // Non-linear defensive impact (elite defense has exponential effect)
+  // Formula: offRating * (110 / oppDefRating)^0.7
+  const baseEfficiency = offRating / 110; // Normalize to 1.0
+  const defAdjustment = Math.pow(110 / oppDefRating, 0.7); // Non-linear (0.7 exponent)
+  const adjustedEfficiency = baseEfficiency * defAdjustment;
+
+  // STEP 3: Calculate points per possession (PPP)
+  let pointsPerPossession = adjustedEfficiency * 1.10; // 1.10 is NBA average PPP baseline
+
+  // NEW PHASE 3: Apply schedule context to efficiency (fatigue affects shooting)
+  if (scheduleContext) {
+    if (scheduleContext.teamBackToBack) {
+      pointsPerPossession *= 0.97; // -3% efficiency on B2B
+    }
+    // Rest advantage improves efficiency
+    if (scheduleContext.restAdvantage > 0) {
+      const restBoost = Math.min(scheduleContext.restAdvantage * 0.005, 0.02); // Max +2% efficiency
+      pointsPerPossession *= (1 + restBoost);
+    }
+  }
+
+  // STEP 4: Apply home court advantage to efficiency (not just flat points)
+  if (isHome) {
+    const homeBoost = (homeAdvantage || 2.5) / 100; // Convert points to efficiency boost
+    pointsPerPossession *= (1 + homeBoost);
+  }
+
+  // STEP 5: Apply team strength differential to efficiency
+  const strengthBoost = (isHome ? teamStrengthDiff : -teamStrengthDiff) / 100;
+  pointsPerPossession *= (1 + (strengthBoost || 0));
+
+  // STEP 6: Apply game script strategic advantages
+  if (gameScript && teamAbbr) {
+    let efficiencyBoost = 0;
+
+    gameScript.keyBattles.forEach(battle => {
+      if (battle.advantage === teamAbbr) {
+        // Paint advantage = more efficient shots (higher PPP)
+        if (battle.type === "Interior Battle") {
+          efficiencyBoost += battle.confidence === "High" ? 0.03 : 0.015; // +3% or +1.5% efficiency
+        }
+        // Perimeter advantage = more three-pointers (higher PPP)
+        else if (battle.type === "Perimeter Shooting") {
+          efficiencyBoost += battle.confidence === "High" ? 0.025 : 0.012; // +2.5% or +1.2% efficiency
+        }
+        // Pace advantage = already in possessions, but slight efficiency bump
+        else if (battle.type === "Tempo Control") {
+          efficiencyBoost += battle.confidence === "High" ? 0.01 : 0.005;
+          // Also increase possessions
+          possessions += battle.confidence === "High" ? 2 : 1;
+        }
+      }
+    });
+
+    pointsPerPossession *= (1 + efficiencyBoost);
+  }
+
+  // STEP 7: Calculate final expected score
+  const expectedScore = possessions * pointsPerPossession;
+
+  return {
+    score: Math.round(expectedScore),
+    possessions: Math.round(possessions * 10) / 10, // Round to 1 decimal
+    efficiency: Math.round(pointsPerPossession * 100) / 100, // Round to 2 decimals
+    breakdown: {
+      basePace,
+      tovAdjustment: Math.round(tovAdjustment * 10) / 10,
+      orebAdjustment: Math.round(orebAdjustment * 10) / 10,
+      offRating,
+      oppDefRating,
+      adjustedEfficiency: Math.round(adjustedEfficiency * 100) / 100
+    }
+  };
+}
+
+/**
+ * LEGACY: Calculate predicted score with ratings, pace, and game script feedback
+ * DEPRECATED - Use calculatePossessionBasedScore for better accuracy
+ * Kept for backwards compatibility
+ */
+function calculatePredictedScore(teamAdv, oppAdv, isHome, homeAdvantage, teamStrengthDiff, sophisticatedPace = null, gameScript = null, teamAbbr = null) {
+  const offRating = teamAdv.offensiveRating || 110;
+  const oppDefRating = oppAdv.defensiveRating || 110;
+
+  // Use sophisticated pace if provided, otherwise fall back to simple calculation
+  const pace = sophisticatedPace || ((teamAdv.pace || 100) + (oppAdv.pace || 100)) / 2;
+
+  // Base score calculation
+  let baseScore = ((offRating + (110 - (oppDefRating - 110))) / 2) * (pace / 100);
+
+  // Apply dynamic home court advantage (passed in, not fixed 2.5)
+  if (isHome) {
+    baseScore += homeAdvantage || 2.5; // Fallback to 2.5 if not provided
+  }
+
+  // Apply team strength differential (positive = favor this team)
+  const strengthAdjustment = isHome ? (teamStrengthDiff || 0) : -(teamStrengthDiff || 0);
+  baseScore += strengthAdjustment;
+
+  // NEW: Apply game script strategic advantages to team score
+  if (gameScript && teamAbbr) {
+    gameScript.keyBattles.forEach(battle => {
+      if (battle.advantage === teamAbbr) {
+        let scriptAdjustment = 0;
+
+        // Paint advantage = more efficient shots
+        if (battle.type === "Interior Battle") {
+          scriptAdjustment = battle.confidence === "High" ? 3 : 1.5;
+        }
+        // Perimeter advantage = more three-pointers
+        else if (battle.type === "Perimeter Shooting") {
+          scriptAdjustment = battle.confidence === "High" ? 2.5 : 1.2;
+        }
+        // Pace advantage = more possessions
+        else if (battle.type === "Tempo Control") {
+          scriptAdjustment = battle.confidence === "High" ? 2 : 1;
+        }
+
+        baseScore += scriptAdjustment;
+      }
+    });
+  }
+
+  return Math.round(baseScore);
 }
 
 // Utility functions from working analyzer

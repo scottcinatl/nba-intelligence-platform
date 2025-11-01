@@ -36,36 +36,51 @@ Position-specific game script boosts:
 - Bigs: +2.0 boost for interior battle advantages
 ```
 
-#### **Layer 3: Team Style Integration**
+#### **Layer 3: Team Style Integration** ✨ UPDATED NOV 2025
 ```javascript
+// NEW: Multiplicative enhancement system with 20% cap
+
 Team Pace Impact:
-- Fast pace teams (>102): Guards get +8% assist boost, +5% minutes
-- Slow pace teams (<98): Bigs get +6% rebound boost, more half-court sets
+- Fast pace (>3 differential): Guards get 1.03× points, 1.05× assists multipliers
 
-Shooting System Impact:  
-- High 3P rate teams (>38%): Wings get +10% three-point boost
-- Paint-focused teams: Bigs get +12% points/rebounds boost
+Three-Point Shooting Advantage:
+- High 3P rate (>40%) vs weak 3P defense (>37%): Shooters get 1.06× points, 1.08× 3PM
 
-Ball Movement Impact:
-- High assist rate: Point guards get +15% assist boost
-- Isolation-heavy: Stars get +8% usage boost
+Ball Movement Systems:
+- High assist rate (>60%): Playmakers get 1.10× assists, 1.02× points
+
+Paint Frequency Advantage (NEW):
+- Paint-heavy (>35%) vs weak paint defense (>42 PA): Bigs get 1.06× points, 1.04× rebounds
+
+Transition Frequency Advantage (NEW):
+- High transition (>18%) vs weak transition D (>50%): Athletic wings/guards get 1.04× points
+
+Enhancement Stacking Rules (CRITICAL):
+- All multipliers compound: final = mult1 × mult2 × mult3 × ...
+- Maximum total multiplier capped at 1.20 (20% boost)
+- Prevents unrealistic projections from stacking multiple advantages
 ```
 
-#### **Layer 4: Game Script Strategic Analysis**
+#### **Layer 4: Game Script Strategic Analysis** ✨ UPDATED NOV 2025
 ```javascript
 Statistical Mismatch Detection (5+ point differentials):
 
-Interior Battle:
-- PF/C get +2.0 point boost if team has paint advantage
-- Opponent bigs get -5% efficiency if facing superior interior
+// NEW: Game script now affects BOTH team scores AND player projections
 
-Perimeter Battle:  
-- PG/SG/SF get +1.2 point boost if team has shooting advantage
-- Three-point volume increases 10-15%
+Team Score Impact:
+- Interior Battle (High): +3 points to team score
+- Interior Battle (Medium): +1.5 points to team score
+- Perimeter Shooting (High): +2.5 points to team score
+- Tempo Control (High): +2 points to team score
 
-Tempo Control:
-- PG get +1.5 assist boost if team controls pace
-- Overall team minutes distribution shifts
+Player Projection Impact (additive):
+- Interior Battle: PF/C get +1.0 to +2.0 point boost
+- Perimeter Battle: PG/SG/SF get +0.6 to +1.2 point boost
+- Tempo Control: PG get +0.8 to +1.5 point boost
+
+Confidence Levels:
+- High: Differential ≥ 8 points or ≥ 6% for percentages
+- Medium: Differential 5-7 points or 4-5% for percentages
 ```
 
 #### **Layer 5: Professional Injury Intelligence**
@@ -89,19 +104,114 @@ Probable Players (90% plays, 95% effectiveness):
 - Minimal teammate impact
 ```
 
-#### **Layer 6: Conditional Teammate Opportunities**
+#### **Layer 6: Conditional Teammate Opportunities** ✨ UPDATED NOV 2025
 ```javascript
-When Star Players Are Uncertain/Out:
+// NEW: Cascading Uncertainty - Teammates get probability-weighted conditional boosts
 
-Superstar Out:
-- Primary beneficiary: +20% across all stats
-- Secondary players: +15% points, +10% usage
-- Role players: +8% minutes, +5% opportunities
+When Star is Questionable (65% to play):
+Scenario A (65% probability): Star plays
+- Teammates: 1.03× multiplier (small boost, star playing but limited)
 
-Star Questionable:  
-- Enhanced boost multiplier: +40% bigger than normal
-- Usage redistribution: +3-5% for key players
-- Minutes reallocation: +2-4 minutes for bench players
+Scenario B (35% probability): Star sits
+- Teammates: 1.20× multiplier if star is Superstar
+- Teammates: 1.15× multiplier if star is Star
+- Teammates: 1.08× multiplier if star is Key Role
+
+Expected Value Calculation:
+expectedPoints = (scenarioA_points × 0.65) + (scenarioB_points × 0.35)
+
+When Star is Doubtful (20% to play):
+Scenario A (20% probability): Star plays
+- Teammates: 1.03× multiplier
+
+Scenario B (80% probability): Star sits
+- Teammates: Same boosts as above but weighted 80%
+
+When Star is Definitively OUT:
+- Primary beneficiary: +20% if superstar out
+- Secondary players: +15% if star out
+- Role players: +8% if key role out
+- No probability weighting needed
+
+Uncertainty Metric:
+uncertainty = |scenarioB_points - scenarioA_points| / basePoints
+- Higher uncertainty = wider projection range
+- Communicated clearly in CSV output
+```
+
+## 📊 **Phase 3: Advanced Enhancements** (Nov 2025)
+
+### **Opponent-Specific Defensive Adjustments**
+```javascript
+// Analyze opponent defensive characteristics
+const opponentDefense = {
+  hasEliteRimProtector: blocksPerGame >= 5.0,
+  zonesFrequently: opponent3PDefense > 0.375,
+  switchHeavy: defRating < 108 && oppAssists < 23,
+  closeoutSpeed: opponent3PDefense < 0.345 ? 'elite' : 'average'
+};
+
+// Apply matchup-specific adjustments
+if (opponentDefense.hasEliteRimProtector && player.isDriveHeavy) {
+  multiplier *= 0.93; // -7% points
+  freeThrowAttempts *= 1.15; // +15% FTA
+}
+
+if (opponentDefense.zonesFrequently && player.isShooter) {
+  multiplier *= 1.05; // +5% for shooters
+  threePointAttempts *= 1.10; // +10% 3PA
+}
+
+if (opponentDefense.switchHeavy && player.isIsoScorer) {
+  multiplier *= 0.96; // -4% (harder to exploit mismatches)
+}
+```
+
+### **Statistical Variance & Confidence Intervals**
+```javascript
+// Calculate actual standard deviation from recent games
+baseStdDev = sqrt(variance(recentGames))
+
+// Apply context multipliers
+if (injuryUncertainty > 0.3) varianceMultiplier *= 1.5
+if (paceVolatility > 5) varianceMultiplier *= 1.2
+if (minutesUncertain) varianceMultiplier *= 1.3
+
+adjustedStdDev = baseStdDev * varianceMultiplier
+
+// Generate confidence intervals
+confidence68 = [mean - stdDev, mean + stdDev] // 68% confidence
+confidence95 = [mean - 2*stdDev, mean + 2*stdDev] // 95% confidence
+```
+
+### **Possession-Based Team Scoring**
+```javascript
+// STEP 1: Calculate actual possessions
+possessions = basePace + (oppTOV - teamTOV)*0.4 + (teamOREB impact)*0.35
+
+// STEP 2: Calculate offensive efficiency (non-linear)
+efficiency = (offRating / 110) * (110 / oppDefRating)^0.7
+
+// STEP 3: Points per possession
+PPP = efficiency * 1.10 * contextualAdjustments
+
+// STEP 4: Final score
+score = possessions * PPP
+```
+
+### **Schedule Context Integration**
+```javascript
+// Back-to-back penalties
+if (backToBack) {
+  possessions -= 1.5
+  efficiency *= 0.97 // -3% shooting
+}
+
+// Rest advantage
+if (restDaysAdvantage > 0) {
+  possessions += restDays * 0.3
+  efficiency *= (1 + min(restDays * 0.005, 0.02))
+}
 ```
 
 ## ⚙️ **Decision Algorithm Flow**
