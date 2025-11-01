@@ -133,3 +133,19 @@ export const NBA_SEASON_CONFIG = {
   SEASON_START_MONTH: 10, // October
   LAST_N_GAMES: 5 // Default lookback window
 };
+
+export const INJURY_REPORT_TIMES = [
+  { hour: 0, minute: 0, format: '12AM' },   // 12:00 AM ET (shown as 12:30 AM on website)
+  { hour: 1, minute: 0, format: '01AM' },   // 1:00 AM ET (shown as 1:30 AM on website)
+  { hour: 2, minute: 0, format: '02AM' },   // 2:00 AM ET (shown as 2:30 AM on website)
+  { hour: 3, minute: 0, format: '03AM' },   // 3:00 AM ET (shown as 3:30 AM on website)
+  { hour: 4, minute: 0, format: '04AM' },   // 4:00 AM ET (shown as 4:30 AM on website)
+  { hour: 5, minute: 0, format: '05AM' },   // 5:00 AM ET (shown as 5:30 AM on website)
+  { hour: 6, minute: 0, format: '06AM' },   // 6:00 AM ET (shown as 6:30 AM on website)
+  { hour: 7, minute: 0, format: '07AM' },   // 7:00 AM ET (shown as 7:30 AM on website)
+  { hour: 8, minute: 0, format: '08AM' },   // 8:00 AM ET (shown as 8:30 AM on website)
+  { hour: 9, minute: 0, format: '09AM' },   // 9:00 AM ET (shown as 9:30 AM on website)
+  { hour: 10, minute: 0, format: '10AM' },  // 10:00 AM ET (shown as 10:30 AM on website)
+  { hour: 11, minute: 0, format: '11AM' },  // 11:00 AM ET (shown as 11:30 AM on website)
+  { hour: 12, minute: 0, format: '12PM' }   // 12:00 PM ET (shown as 12:30 PM on website)
+];

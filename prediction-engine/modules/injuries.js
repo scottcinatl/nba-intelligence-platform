@@ -1,9 +1,10 @@
 /**
  * Injuries Module
  * Handles all injury impact calculations including probability-weighted projections and teammate boosts
+ * Also handles fetching and parsing official NBA injury reports
  */
 
-import { IMPACT_SCORE_THRESHOLDS, IMPACT_SCORE_WEIGHTS, INJURY_STATUS_IMPACTS, INJURY_BOOST_MULTIPLIERS } from '../config/constants.js';
+import { IMPACT_SCORE_THRESHOLDS, IMPACT_SCORE_WEIGHTS, INJURY_STATUS_IMPACTS, INJURY_BOOST_MULTIPLIERS, WORKERS, INJURY_REPORT_TIMES } from '../config/constants.js';
 
 /**
  * Normalize player name for matching
@@ -618,5 +619,473 @@ export function applyInjuryImpact(players, injuries, teamStats) {
   } else {
     // Use simple early-season logic (< 10 games)
     return applyEarlySeasonInjuryImpact(playersWithImpact, injuries, teamStats);
+  }
+}
+
+/**
+ * ============================================================================
+ * INJURY REPORT FETCHING AND PARSING
+ * Functions for fetching and parsing official NBA injury reports with smart
+ * time selection based on ET timezone
+ * ============================================================================
+ */
+
+/**
+ * Get current time in ET timezone
+ * Handles conversion from any local timezone to ET (UTC-5 or UTC-4 during DST)
+ */
+function getCurrentTimeET() {
+  const now = new Date();
+
+  // Convert to ET timezone using toLocaleString
+  const etTimeString = now.toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
+  // Parse the ET time string (format: "MM/DD/YYYY, HH:MM:SS")
+  const [datePart, timePart] = etTimeString.split(', ');
+  const [month, day, year] = datePart.split('/').map(Number);
+  const [hour, minute, second] = timePart.split(':').map(Number);
+
+  return {
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    second,
+    dateString: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  };
+}
+
+/**
+ * Format a report time into a human-readable description
+ */
+function formatReportTimeDescription(report) {
+  const hour12 = report.hour === 0 ? 12 : (report.hour > 12 ? report.hour - 12 : report.hour);
+  const ampm = report.hour < 12 ? 'AM' : 'PM';
+  return `${hour12}:00 ${ampm} ET`;
+}
+
+/**
+ * Get the most recent available injury report time
+ * Returns the format string (e.g., "09AM") for the most recent report
+ */
+function getMostRecentReportTime() {
+  const etTime = getCurrentTimeET();
+  const currentMinutes = etTime.hour * 60 + etTime.minute;
+
+  // Find the most recent report time that has already passed
+  let selectedReport = null;
+
+  for (let i = INJURY_REPORT_TIMES.length - 1; i >= 0; i--) {
+    const report = INJURY_REPORT_TIMES[i];
+    const reportMinutes = report.hour * 60 + report.minute;
+
+    if (currentMinutes >= reportMinutes) {
+      selectedReport = report;
+      break;
+    }
+  }
+
+  // If no report has passed yet today (before 12:00 AM), use yesterday's 12:00 PM report
+  if (!selectedReport) {
+    const yesterday = new Date(etTime.year, etTime.month - 1, etTime.day - 1);
+    const yesterdayString = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+
+    return {
+      time: '12PM',
+      date: yesterdayString,
+      description: "12:00 PM ET (previous day)"
+    };
+  }
+
+  return {
+    time: selectedReport.format,
+    date: etTime.dateString,
+    description: formatReportTimeDescription(selectedReport)
+  };
+}
+
+/**
+ * Convert time code (e.g., "09AM") to readable format (e.g., "9:00 AM ET")
+ */
+function formatTimeFromCode(timeCode) {
+  const match = timeCode.match(/(\d{2})(AM|PM)/);
+  if (!match) return timeCode;
+
+  let hour = parseInt(match[1]);
+  const ampm = match[2];
+
+  // Convert to 12-hour format (hour is already in 1-12 range in the format)
+  return `${hour}:00 ${ampm} ET`;
+}
+
+/**
+ * Try to fetch injury report for a specific date and time
+ */
+async function tryFetchInjuryReport(date, time) {
+  try {
+    const url = `${WORKERS.injuriesOfficial}/?date=${date}&time=${time}`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.success && data.pdfData) {
+      return {
+        success: true,
+        pdfUrl: data.pdfUrl,
+        pdfData: data.pdfData, // Base64 encoded PDF from worker
+        reportDescription: data.time ? formatTimeFromCode(data.time) : '3:00 PM ET'
+      };
+    }
+
+    return { success: false };
+  } catch (error) {
+    return { success: false };
+  }
+}
+
+/**
+ * Fall back to earlier report times if the most recent one isn't available
+ */
+async function fallbackToEarlierReports(reportInfo) {
+  // Get the index of the time we tried
+  const targetIndex = INJURY_REPORT_TIMES.findIndex(r => r.format === reportInfo.time);
+
+  // Try all earlier times in reverse chronological order
+  for (let i = targetIndex - 1; i >= 0; i--) {
+    const report = INJURY_REPORT_TIMES[i];
+    const result = await tryFetchInjuryReport(reportInfo.date, report.format);
+
+    if (result.success) {
+      return result; // Result already has reportDescription from tryFetchInjuryReport
+    }
+  }
+
+  // No reports found for today
+  return { success: false };
+}
+
+/**
+ * Extract team abbreviation from a line if it contains a team name
+ */
+function getTeamFromLine(line) {
+  const teamPatterns = [
+    { pattern: 'HoustonRockets', abbr: 'HOU' },
+    { pattern: 'TorontoRaptors', abbr: 'TOR' },
+    { pattern: 'ClevelandCavaliers', abbr: 'CLE' },
+    { pattern: 'BostonCeltics', abbr: 'BOS' },
+    { pattern: 'OrlandoMagic', abbr: 'ORL' },
+    { pattern: 'DetroitPistons', abbr: 'DET' },
+    { pattern: 'AtlantaHawks', abbr: 'ATL' },
+    { pattern: 'BrooklynNets', abbr: 'BKN' },
+    { pattern: 'CharlotteHornets', abbr: 'CHA' },
+    { pattern: 'ChicagoBulls', abbr: 'CHI' },
+    { pattern: 'DallasMavericks', abbr: 'DAL' },
+    { pattern: 'DenverNuggets', abbr: 'DEN' },
+    { pattern: 'GoldenStateWarriors', abbr: 'GSW' },
+    { pattern: 'IndianaPacers', abbr: 'IND' },
+    { pattern: 'LAClippers', abbr: 'LAC' },
+    { pattern: 'LosAngelesLakers', abbr: 'LAL' },
+    { pattern: 'MemphisGrizzlies', abbr: 'MEM' },
+    { pattern: 'MiamiHeat', abbr: 'MIA' },
+    { pattern: 'MilwaukeeBucks', abbr: 'MIL' },
+    { pattern: 'MinnesotaTimberwolves', abbr: 'MIN' },
+    { pattern: 'NewOrleansPelicans', abbr: 'NOP' },
+    { pattern: 'NewYorkKnicks', abbr: 'NYK' },
+    { pattern: 'OklahomaCityThunder', abbr: 'OKC' },
+    { pattern: 'Philadelphia76ers', abbr: 'PHI' },
+    { pattern: 'PhoenixSuns', abbr: 'PHX' },
+    { pattern: 'PortlandTrailBlazers', abbr: 'POR' },
+    { pattern: 'SacramentoKings', abbr: 'SAC' },
+    { pattern: 'SanAntonioSpurs', abbr: 'SAS' },
+    { pattern: 'UtahJazz', abbr: 'UTA' },
+    { pattern: 'WashingtonWizards', abbr: 'WAS' }
+  ];
+
+  for (const team of teamPatterns) {
+    if (line.includes(team.pattern)) {
+      return team.abbr;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Parse injury data from a concatenated line
+ * Format: TeamNameLastName,FirstNameStatus[Reason]
+ * Example: SacramentoKingsClifford,NiqueQuestionableInjury/Illness-RightHamstring
+ */
+function parseInjuryFromConcatenatedLine(line, fallbackTeam = null) {
+  try {
+    // First try to find team in the line itself
+    let teamAbbr = getTeamFromLine(line);
+    let teamPattern = null;
+
+    if (teamAbbr) {
+      // Find the team pattern that matched
+      const teamPatterns = [
+        { pattern: 'HoustonRockets', abbr: 'HOU' },
+        { pattern: 'TorontoRaptors', abbr: 'TOR' },
+        { pattern: 'ClevelandCavaliers', abbr: 'CLE' },
+        { pattern: 'BostonCeltics', abbr: 'BOS' },
+        { pattern: 'OrlandoMagic', abbr: 'ORL' },
+        { pattern: 'DetroitPistons', abbr: 'DET' },
+        { pattern: 'AtlantaHawks', abbr: 'ATL' },
+        { pattern: 'BrooklynNets', abbr: 'BKN' },
+        { pattern: 'CharlotteHornets', abbr: 'CHA' },
+        { pattern: 'ChicagoBulls', abbr: 'CHI' },
+        { pattern: 'DallasMavericks', abbr: 'DAL' },
+        { pattern: 'DenverNuggets', abbr: 'DEN' },
+        { pattern: 'GoldenStateWarriors', abbr: 'GSW' },
+        { pattern: 'IndianaPacers', abbr: 'IND' },
+        { pattern: 'LAClippers', abbr: 'LAC' },
+        { pattern: 'LosAngelesLakers', abbr: 'LAL' },
+        { pattern: 'MemphisGrizzlies', abbr: 'MEM' },
+        { pattern: 'MiamiHeat', abbr: 'MIA' },
+        { pattern: 'MilwaukeeBucks', abbr: 'MIL' },
+        { pattern: 'MinnesotaTimberwolves', abbr: 'MIN' },
+        { pattern: 'NewOrleansPelicans', abbr: 'NOP' },
+        { pattern: 'NewYorkKnicks', abbr: 'NYK' },
+        { pattern: 'OklahomaCityThunder', abbr: 'OKC' },
+        { pattern: 'Philadelphia76ers', abbr: 'PHI' },
+        { pattern: 'PhoenixSuns', abbr: 'PHX' },
+        { pattern: 'PortlandTrailBlazers', abbr: 'POR' },
+        { pattern: 'SacramentoKings', abbr: 'SAC' },
+        { pattern: 'SanAntonioSpurs', abbr: 'SAS' },
+        { pattern: 'UtahJazz', abbr: 'UTA' },
+        { pattern: 'WashingtonWizards', abbr: 'WAS' }
+      ];
+
+      teamPattern = teamPatterns.find(tp => tp.abbr === teamAbbr);
+    } else {
+      // Use fallback team from context
+      teamAbbr = fallbackTeam;
+    }
+
+    if (!teamAbbr) return null;
+
+    // Extract status (check in priority order: Questionable before Question, etc.)
+    let status = null;
+    let statusWord = null;
+    if (line.includes('Questionable')) {
+      status = 'questionable';
+      statusWord = 'Questionable';
+    } else if (line.includes('Doubtful')) {
+      status = 'doubtful';
+      statusWord = 'Doubtful';
+    } else if (line.includes('Probable')) {
+      status = 'probable';
+      statusWord = 'Probable';
+    } else if (line.includes('Available')) {
+      status = 'available';
+      statusWord = 'Available';
+    } else if (line.includes('Out')) {
+      status = 'out';
+      statusWord = 'Out';
+    }
+
+    if (!status) return null;
+
+    // Remove team name from line if present
+    let workingLine = line;
+    if (teamPattern) {
+      workingLine = workingLine.replace(teamPattern.pattern, '');
+    }
+
+    // Find where the status word appears
+    const statusIndex = workingLine.indexOf(statusWord);
+    if (statusIndex === -1) return null;
+
+    // Extract player name (everything before status)
+    let playerName = workingLine.substring(0, statusIndex).trim();
+
+    // Player name is in format "LastName,FirstName" - convert to "FirstName LastName"
+    if (playerName.includes(',')) {
+      const parts = playerName.split(',');
+      if (parts.length === 2) {
+        playerName = `${parts[1].trim()} ${parts[0].trim()}`;
+      }
+    }
+
+    // Extract description (everything after status)
+    let description = workingLine.substring(statusIndex + statusWord.length).trim();
+
+    // Clean up description
+    description = description.substring(0, 100); // Truncate
+
+    // Final validation
+    if (!playerName || playerName.length < 3) return null;
+
+    // Make sure we have at least first and last name (or it's a Jr./Sr. case)
+    const nameParts = playerName.split(' ').filter(p => p.length > 0);
+    if (nameParts.length < 2 && !playerName.includes('Jr') && !playerName.includes('Sr')) {
+      return null; // Invalid name format
+    }
+
+    // Clean up description further
+    if (description) {
+      // Remove trailing garbage
+      const cleanDesc = description.replace(/[^a-zA-Z0-9\s\-\/,\.()]+.*$/, '').trim();
+      description = cleanDesc;
+    }
+
+    return {
+      teamAbbreviation: teamAbbr,
+      playerName: playerName,
+      status: status,
+      description: description,
+      source: 'NBA_OFFICIAL'
+    };
+
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * Parse the official NBA injury report PDF (concatenated format with no spaces)
+ */
+function parseOfficialInjuryReport(text) {
+  const injuries = [];
+
+  try {
+    // The official report has all text concatenated with no spaces
+    const lines = text.split('\n');
+    let currentTeam = null; // Track current team for continuation lines
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Skip empty lines and headers
+      if (!line || line.includes('GameDate') || line.includes('Page') ||
+          line.includes('InjuryReport:') || line.length < 10) {
+        continue;
+      }
+
+      // Check if this line has a team name (establishes context)
+      const teamFromLine = getTeamFromLine(line);
+      if (teamFromLine) {
+        currentTeam = teamFromLine;
+      }
+
+      // Look for lines that contain injury status (concatenated format)
+      if (line.includes('Out') || line.includes('Probable') || line.includes('Questionable') || line.includes('Doubtful')) {
+
+        // Try to extract player injury data from the concatenated line
+        const injuryData = parseInjuryFromConcatenatedLine(line, currentTeam);
+        if (injuryData) {
+          injuries.push(injuryData);
+        }
+      }
+    }
+
+    // Simple summary instead of detailed team breakdown
+    console.log(`   📊 Extracted: ${injuries.length} total injuries from official report`);
+
+  } catch (error) {
+    console.log(`   ⚠️  Error parsing official injury report: ${error.message}`);
+  }
+
+  return injuries;
+}
+
+/**
+ * Filter injuries by team abbreviation
+ */
+export function getTeamInjuries(allInjuries, teamAbbr) {
+  return allInjuries.filter(injury =>
+    injury.teamAbbreviation === teamAbbr.toUpperCase()
+  );
+}
+
+/**
+ * ENHANCED: Fetch injuries from official NBA injury report with smart time selection
+ * Automatically selects most recent available report and falls back to earlier times if needed
+ * @param {object} pdf - PDF parser instance (pdf-parse)
+ * @returns {object} - { success, allInjuries, dataSource, pdfEnhanced, pdfUrl, rawPdfLength, reportTime }
+ */
+export async function fetchInjuriesWithOfficial(pdf) {
+  let dataSource = 'NBA_OFFICIAL';
+  let pdfEnhanced = false;
+
+  try {
+    console.log(`📋 Fetching official NBA injury report...`);
+
+    // Get the most recent report time based on current ET time
+    const reportInfo = getMostRecentReportTime();
+    console.log(`   🕐 Targeting ${reportInfo.description} report`);
+
+    // Try the most recent report time first
+    let result = await tryFetchInjuryReport(reportInfo.date, reportInfo.time);
+
+    // If failed, fall back to earlier report times
+    if (!result.success) {
+      console.log(`   ⚠️  ${reportInfo.description} report not available, trying earlier times...`);
+      result = await fallbackToEarlierReports(reportInfo);
+    }
+
+    // If we got a successful result, parse the PDF
+    if (result.success && result.pdfData && pdf) {
+      console.log(`   📄 Processing official report from worker`);
+      console.log(`   ✅ Using ${result.reportDescription} report`);
+
+      try {
+        // Decode base64 PDF data from worker
+        const buffer = Buffer.from(result.pdfData, 'base64');
+
+        console.log(`   📝 Parsing official injury report...`);
+        const data = await pdf(buffer);
+        const text = data.text;
+
+        console.log(`   ✅ Official report parsed! ${text.length} characters extracted`);
+
+        const allInjuries = parseOfficialInjuryReport(text);
+        console.log(`   📊 Extracted: ${allInjuries.length} total injuries from official report`);
+
+        pdfEnhanced = true;
+        dataSource = 'NBA_OFFICIAL_PARSED';
+
+        return {
+          success: true,
+          allInjuries,
+          dataSource,
+          pdfEnhanced,
+          pdfUrl: result.pdfUrl,
+          rawPdfLength: text.length,
+          reportTime: result.reportDescription
+        };
+      } catch (pdfError) {
+        console.log(`   ⚠️  Official report parsing failed: ${pdfError.message}`);
+      }
+    } else if (!pdf) {
+      console.log(`   ⚠️  PDF parsing not available`);
+    } else {
+      console.log(`   ⚠️  No injury reports available for any time today`);
+    }
+
+    return {
+      success: false,
+      allInjuries: [],
+      dataSource: 'UNAVAILABLE',
+      pdfEnhanced: false
+    };
+
+  } catch (error) {
+    console.log(`   ⚠️  Official injury report error: ${error.message}`);
+    return {
+      success: false,
+      allInjuries: [],
+      dataSource: 'UNAVAILABLE',
+      pdfEnhanced: false
+    };
   }
 }
