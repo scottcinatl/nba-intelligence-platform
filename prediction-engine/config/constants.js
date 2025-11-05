@@ -147,5 +147,12 @@ export const INJURY_REPORT_TIMES = [
   { hour: 9, minute: 0, format: '09AM' },   // 9:00 AM ET (shown as 9:30 AM on website)
   { hour: 10, minute: 0, format: '10AM' },  // 10:00 AM ET (shown as 10:30 AM on website)
   { hour: 11, minute: 0, format: '11AM' },  // 11:00 AM ET (shown as 11:30 AM on website)
-  { hour: 12, minute: 0, format: '12PM' }   // 12:00 PM ET (shown as 12:30 PM on website)
+  { hour: 12, minute: 0, format: '12PM' },  // 12:00 PM ET (shown as 12:30 PM on website)
+  { hour: 13, minute: 0, format: '01PM' },  // 1:00 PM ET
+  { hour: 14, minute: 0, format: '02PM' },  // 2:00 PM ET
+  { hour: 15, minute: 0, format: '03PM' },  // 3:00 PM ET
+  { hour: 16, minute: 0, format: '04PM' },  // 4:00 PM ET
+  { hour: 17, minute: 0, format: '05PM' },  // 5:00 PM ET
+  { hour: 18, minute: 0, format: '06PM' },  // 6:00 PM ET
+  { hour: 19, minute: 0, format: '07PM' }   // 7:00 PM ET
 ];

@@ -826,6 +826,15 @@ function getTeamFromLine(line) {
  */
 function parseInjuryFromConcatenatedLine(line, fallbackTeam = null) {
   try {
+    // NEW: Remove game schedule prefix (format: "11/04/202507:30(ET)MIL@TOR")
+    // Pattern: Date + Time + (ET) + Matchup
+    const schedulePattern = /^\d{2}\/\d{2}\/\d{4}\d{2}:\d{2}\([^)]+\)[A-Z]{3}@[A-Z]{3}/;
+    line = line.replace(schedulePattern, '');
+
+    // Also remove embedded matchup patterns (e.g., "PHI@CHI" appearing in player names)
+    const matchupPattern = /[A-Z]{3}@[A-Z]{3}/g;
+    line = line.replace(matchupPattern, '');
+
     // First try to find team in the line itself
     let teamAbbr = getTeamFromLine(line);
     let teamPattern = null;

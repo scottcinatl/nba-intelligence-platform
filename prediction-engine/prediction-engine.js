@@ -61,10 +61,14 @@ async function main() {
   const args = process.argv.slice(2);
   const isQuickScan = args.includes('--quick');
   const gameFilter = args.find(arg => arg.startsWith('--game='))?.split('=')[1];
-  
+  const dateParam = args.find(arg => arg.startsWith('--date='))?.split('=')[1];
+
+  // Use provided date or default to today's date in local timezone (YYYY-MM-DD format)
+  const targetDate = dateParam || new Date().toLocaleDateString('en-CA');
+
   try {
-    console.log('📅 Fetching today\'s games...');
-    const gamesData = await fetchGames();
+    console.log(`📅 Fetching games for ${targetDate}...`);
+    const gamesData = await fetchGames(targetDate);
     
     if (!gamesData.success || gamesData.gameCount === 0) {
       console.log('❌ No games found for today.');
@@ -154,8 +158,9 @@ async function quickScanGames(games) {
   console.log('💡 For specific game: node index.js --game=PHI-WAS');
 }
 
-async function fetchGames() {
-  const response = await fetch(`${WORKERS.games}/games`);
+async function fetchGames(date = null) {
+  const url = date ? `${WORKERS.games}/games?date=${date}` : `${WORKERS.games}/games`;
+  const response = await fetch(url);
   return await response.json();
 }
 

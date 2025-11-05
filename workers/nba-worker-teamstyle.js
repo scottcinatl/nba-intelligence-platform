@@ -113,9 +113,9 @@ async function buildTeamStyleProfile(teamId, season, lastN) {
     // OFFENSIVE STYLE PROFILE
     offensiveStyle: {
       // Pace and tempo - no defaults, show null if unavailable
-      pace: baseStats.PACE,
-      offensiveRating: baseStats.OFF_RATING,
-      possessionsPerGame: baseStats.POSS,
+      pace: advancedStats.PACE,
+      offensiveRating: advancedStats.OFF_RATING,
+      possessionsPerGame: advancedStats.POSS,
       
       // Shot selection DNA
       shotSelection: {
@@ -165,10 +165,10 @@ async function buildTeamStyleProfile(teamId, season, lastN) {
       }
     },
     
-    // DEFENSIVE STYLE PROFILE  
+    // DEFENSIVE STYLE PROFILE
     defensiveStyle: {
       // Overall defensive impact
-      defensiveRating: baseStats.DEF_RATING,
+      defensiveRating: advancedStats.DEF_RATING,
       opponentFieldGoalPct: opponentStats.OPP_FG_PCT,
       opponentThreePointPct: opponentStats.OPP_FG3_PCT,
       
@@ -242,10 +242,10 @@ async function buildTeamStyleProfile(teamId, season, lastN) {
     advanced: {
       // Four factors (Dean Oliver's basketball analytics)
       fourFactors: {
-        offensiveRating: baseStats.OFF_RATING,
-        defensiveRating: baseStats.DEF_RATING,
-        netRating: baseStats.OFF_RATING && baseStats.DEF_RATING ? baseStats.OFF_RATING - baseStats.DEF_RATING : null,
-        pace: baseStats.PACE
+        offensiveRating: advancedStats.OFF_RATING,
+        defensiveRating: advancedStats.DEF_RATING,
+        netRating: advancedStats.OFF_RATING && advancedStats.DEF_RATING ? advancedStats.OFF_RATING - advancedStats.DEF_RATING : null,
+        pace: advancedStats.PACE
       },
       
       // Team chemistry indicators
@@ -266,11 +266,11 @@ async function buildTeamStyleProfile(teamId, season, lastN) {
     // CALCULATED TEAM DNA SUMMARY
     teamDNA: {
       primaryStyle: determinePlayStyle(baseStats, advancedStats),
-      pace: baseStats.PACE ? categorizePace(baseStats.PACE) : 'Unknown',
+      pace: advancedStats.PACE ? categorizePace(advancedStats.PACE) : 'Unknown',
       offense: categorizeOffense(baseStats, shootingStats),
       defense: categorizeDefense(baseStats, opponentStats),
       keyStrengths: identifyKeyStrengths(baseStats, advancedStats, shootingStats),
-      keyWeaknesses: identifyKeyWeaknesses(baseStats, opponentStats)
+      keyWeaknesses: identifyKeyWeaknesses(baseStats, advancedStats, opponentStats)
     }
   };
 }
@@ -397,7 +397,7 @@ function calculateRate(numerator, denominator) {
  * Determine primary play style based on stats
  */
 function determinePlayStyle(baseStats, advancedStats) {
-  const pace = baseStats.PACE;
+  const pace = advancedStats.PACE;
   const threePointRate = calculateRate(baseStats.FG3A, baseStats.FGA);
   const assistRate = calculateRate(baseStats.AST, baseStats.FGM);
 
@@ -477,10 +477,10 @@ function categorizeDefense(baseStats, opponentStats) {
  */
 function identifyKeyStrengths(baseStats, advancedStats, shootingStats) {
   const strengths = [];
-  
-  if (baseStats.PACE && baseStats.PACE > 103) strengths.push('Fast Pace');
-  if (baseStats.OFF_RATING && baseStats.OFF_RATING > 115) strengths.push('High-Powered Offense');
-  if (baseStats.DEF_RATING && baseStats.DEF_RATING < 108) strengths.push('Elite Defense');
+
+  if (advancedStats.PACE && advancedStats.PACE > 103) strengths.push('Fast Pace');
+  if (advancedStats.OFF_RATING && advancedStats.OFF_RATING > 115) strengths.push('High-Powered Offense');
+  if (advancedStats.DEF_RATING && advancedStats.DEF_RATING < 108) strengths.push('Elite Defense');
   if (calculateRate(baseStats.FG3A, baseStats.FGA) > 0.42) strengths.push('Three-Point Shooting');
   if (calculateRate(baseStats.AST, baseStats.FGM) > 0.65) strengths.push('Ball Movement');
   if (baseStats.PAINT_PTS && baseStats.PAINT_PTS > 50) strengths.push('Interior Scoring');
@@ -491,15 +491,15 @@ function identifyKeyStrengths(baseStats, advancedStats, shootingStats) {
 /**
  * Identify key team weaknesses
  */
-function identifyKeyWeaknesses(baseStats, opponentStats) {
+function identifyKeyWeaknesses(baseStats, advancedStats, opponentStats) {
   const weaknesses = [];
-  
+
   if (baseStats.TOV && baseStats.TOV > 16) weaknesses.push('Ball Security');
   if (baseStats.FT_PCT && baseStats.FT_PCT < 0.72) weaknesses.push('Free Throw Shooting');
   if (calculateRate(baseStats.OREB, baseStats.OREB + opponentStats.DREB) < 0.25) weaknesses.push('Offensive Rebounding');
-  if (baseStats.DEF_RATING && baseStats.DEF_RATING > 115) weaknesses.push('Defensive Efficiency');
+  if (advancedStats.DEF_RATING && advancedStats.DEF_RATING > 115) weaknesses.push('Defensive Efficiency');
   if (opponentStats.OPP_FG3_PCT && opponentStats.OPP_FG3_PCT > 0.37) weaknesses.push('Three-Point Defense');
-  
+
   return weaknesses;
 }
 
